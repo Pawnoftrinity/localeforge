@@ -1,8 +1,9 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
-// ─── LANGUAGE LIST (70) ───────────────────────────────────────────────────────
+/* ───────── LANGUAGE LIST (100) ───────── */
+
 const LANGUAGES = [
-  // ── European ──────────────────────────────────────────────────────────────
+  // ── European
   { code: "es", name: "Spanish", native: "Español" },
   { code: "fr", name: "French", native: "Français" },
   { code: "de", name: "German", native: "Deutsch" },
@@ -32,22 +33,38 @@ const LANGUAGES = [
   { code: "ga", name: "Irish", native: "Gaeilge" },
   { code: "ca", name: "Catalan", native: "Català" },
   { code: "af", name: "Afrikaans", native: "Afrikaans" },
-  // ── East European / Slavic ────────────────────────────────────────────────
+  { code: "is", name: "Icelandic", native: "Íslenska" },
+  { code: "gl", name: "Galician", native: "Galego" },
+  { code: "eu", name: "Basque", native: "Euskara" },
+  { code: "br", name: "Breton", native: "Brezhoneg" },
+  { code: "oc", name: "Occitan", native: "Occitan" },
+  { code: "mt", name: "Maltese", native: "Malti" },
+  { code: "lb", name: "Luxembourgish", native: "Lëtzebuergesch" },
+  { code: "bs", name: "Bosnian", native: "Bosanski" },
+  { code: "fy", name: "Frisian", native: "Frysk" },
+
+  // ── East European / Slavic
   { code: "ru", name: "Russian", native: "Русский" },
   { code: "uk", name: "Ukrainian", native: "Українська" },
-  // ── Caucasus & Central Asia ───────────────────────────────────────────────
+
+  // ── Caucasus & Central Asia
   { code: "hy", name: "Armenian", native: "Հայերեն" },
   { code: "ka", name: "Georgian", native: "ქართული" },
   { code: "az", name: "Azerbaijani", native: "Azərbaycan" },
   { code: "kk", name: "Kazakh", native: "Қазақша" },
   { code: "uz", name: "Uzbek", native: "O'zbek" },
-  // ── East Asia ─────────────────────────────────────────────────────────────
+  { code: "ky", name: "Kyrgyz", native: "Кыргызча" },
+  { code: "tg", name: "Tajik", native: "Тоҷикӣ" },
+  { code: "tk", name: "Turkmen", native: "Türkmen" },
+
+  // ── East Asia
   { code: "zh-CN", name: "Chinese (Simplified)", native: "简体中文" },
   { code: "zh-TW", name: "Chinese (Traditional)", native: "繁體中文" },
   { code: "ja", name: "Japanese", native: "日本語" },
   { code: "ko", name: "Korean", native: "한국어" },
   { code: "mn", name: "Mongolian", native: "Монгол" },
-  // ── South Asia ────────────────────────────────────────────────────────────
+
+  // ── South Asia
   { code: "hi", name: "Hindi", native: "हिन्दी" },
   { code: "bn", name: "Bengali", native: "বাংলা" },
   { code: "ur", name: "Urdu", native: "اردو" },
@@ -58,7 +75,10 @@ const LANGUAGES = [
   { code: "si", name: "Sinhala", native: "සිංහල" },
   { code: "ta", name: "Tamil", native: "தமிழ்" },
   { code: "te", name: "Telugu", native: "తెలుగు" },
-  // ── Southeast Asia ────────────────────────────────────────────────────────
+  { code: "sa", name: "Sanskrit", native: "संस्कृतम्" },
+  { code: "ps", name: "Pashto", native: "پښتو" },
+
+  // ── Southeast Asia
   { code: "vi", name: "Vietnamese", native: "Tiếng Việt" },
   { code: "th", name: "Thai", native: "ไทย" },
   { code: "id", name: "Indonesian", native: "Bahasa Indonesia" },
@@ -66,24 +86,49 @@ const LANGUAGES = [
   { code: "tl", name: "Tagalog", native: "Tagalog" },
   { code: "my", name: "Burmese", native: "မြန်မာဘာသာ" },
   { code: "km", name: "Khmer", native: "ភាសាខ្មែរ" },
-  // ── Middle East ───────────────────────────────────────────────────────────
+  { code: "lo", name: "Lao", native: "ລາວ" },
+  { code: "jv", name: "Javanese", native: "Basa Jawa" },
+  { code: "su", name: "Sundanese", native: "Basa Sunda" },
+
+  // ── Middle East
   { code: "ar", name: "Arabic", native: "العربية" },
   { code: "he", name: "Hebrew", native: "עברית" },
   { code: "tr", name: "Turkish", native: "Türkçe" },
   { code: "fa", name: "Persian", native: "فارسی" },
   { code: "ku", name: "Kurdish", native: "کوردی" },
-  // ── Africa ────────────────────────────────────────────────────────────────
+
+  // ── Africa
   { code: "sw", name: "Swahili", native: "Kiswahili" },
   { code: "am", name: "Amharic", native: "አማርኛ" },
   { code: "ha", name: "Hausa", native: "Hausa" },
   { code: "yo", name: "Yoruba", native: "Yorùbá" },
   { code: "so", name: "Somali", native: "Soomaali" },
   { code: "zu", name: "Zulu", native: "isiZulu" },
-  // ── Americas / Caribbean ─────────────────────────────────────────────────
+  { code: "xh", name: "Xhosa", native: "isiXhosa" },
+  { code: "st", name: "Sesotho", native: "Sesotho" },
+  { code: "tn", name: "Setswana", native: "Setswana" },
+  { code: "ts", name: "Tsonga", native: "Xitsonga" },
+  { code: "ve", name: "Venda", native: "Tshivenda" },
+  { code: "nr", name: "South Ndebele", native: "isiNdebele" },
+  { code: "rw", name: "Kinyarwanda", native: "Kinyarwanda" },
+  { code: "lg", name: "Luganda", native: "Luganda" },
+  { code: "rn", name: "Kirundi", native: "Kirundi" },
+  { code: "sn", name: "Shona", native: "ChiShona" },
+  { code: "ti", name: "Tigrinya", native: "ትግርኛ" },
+  { code: "om", name: "Oromo", native: "Afaan Oromoo" },
+  { code: "mg", name: "Malagasy", native: "Malagasy" },
+  { code: "ak", name: "Akan", native: "Akan" },
+
+  // ── Americas / Caribbean
   { code: "ht", name: "Haitian Creole", native: "Kreyòl Ayisyen" },
+
+  // ── English variants (for completeness)
+  { code: "en-GB", name: "English (UK)", native: "English (UK)" },
+  { code: "en-US", name: "English (US)", native: "English (US)" },
 ];
 
-// ─── JSON HELPERS ─────────────────────────────────────────────────────────────
+/* ───────── JSON HELPERS ───────── */
+
 function flattenKeys(obj, prefix = "") {
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -127,7 +172,8 @@ function deepMerge(target, source) {
   return out;
 }
 
-// ─── DOWNLOAD HELPER ──────────────────────────────────────────────────────────
+/* ───────── DOWNLOAD HELPER ───────── */
+
 function downloadBlob(filename, content, mime = "application/json") {
   const blob = content instanceof Blob ? content : new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -140,11 +186,113 @@ function downloadBlob(filename, content, mime = "application/json") {
   URL.revokeObjectURL(url);
 }
 
-// ─── CLAUDE TRANSLATE ─────────────────────────────────────────────────────────
+/* ───────── TRANSLATION (Claude / Gemini / ChatGPT / Copilot) ───────── */
+
 const CHUNK = 20;
 
-async function translateChunk(pairs, langName, langNative) {
-  const lines = pairs.map((p, i) => `${i + 1}. [${p.key}] ${JSON.stringify(p.value)}`).join("\n");
+async function callClaude({ apiKey, modelId, prompt }) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: modelId || "claude-3-5-sonnet-20241022",
+      max_tokens: 1000,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Claude API ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.content?.[0]?.text ?? "[]";
+}
+
+async function callOpenAI({ apiKey, modelId, prompt }) {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: modelId || "gpt-4.1-mini",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 1000,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`OpenAI API ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content ?? "[]";
+}
+
+async function callGemini({ apiKey, modelId, prompt }) {
+  const model = modelId || "gemini-1.5-flash";
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+      apiKey
+    )}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+      }),
+    }
+  );
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Gemini API ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  const text =
+    data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") ?? "[]";
+  return text;
+}
+
+// Copilot here is modeled as an Azure OpenAI‑compatible endpoint
+async function callCopilot({ apiKey, apiBase, modelId, prompt }) {
+  if (!apiBase) {
+    throw new Error("Copilot base URL is required (e.g. your Azure OpenAI endpoint).");
+  }
+  const deployment = modelId || "gpt-4o-mini";
+  const url = `${apiBase.replace(/\/+$/, "")}/openai/deployments/${deployment}/chat/completions?api-version=2024-02-15-preview`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": apiKey,
+    },
+    body: JSON.stringify({
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 1000,
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Copilot API ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content ?? "[]";
+}
+
+async function translateChunk(
+  pairs,
+  langName,
+  langNative,
+  providerConfig
+) {
+  const lines = pairs
+    .map((p, i) => `${i + 1}. [${p.key}] ${JSON.stringify(p.value)}`)
+    .join("\n");
+
   const prompt = `You are a professional medical equipment terminology translator for a healthcare technology management (HTM) app used by Biomedical Equipment Technicians (BMETs).
 
 Translate the following UI strings from English to ${langName} (${langNative}).
@@ -162,26 +310,34 @@ RULES:
 Input strings:
 ${lines}
 
-Return format: ["translation1", "translation2", ...]`;
+Return format:
+["translation1", "translation2", ...]`;
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
-      messages: [{ role: "user", content: prompt }],
-    }),
-  });
+  const { provider, apiKey, apiBase, modelId } = providerConfig;
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${res.status}: ${text.slice(0, 200)}`);
+  if (!apiKey && provider !== "none") {
+    throw new Error("API key is required for the selected provider.");
   }
 
-  const data = await res.json();
-  const content = data.content?.[0]?.text ?? "[]";
-  const clean = content.replace(/```json|```/gi, "").trim();
+  let raw;
+  switch (provider) {
+    case "claude":
+      raw = await callClaude({ apiKey, modelId, prompt });
+      break;
+    case "openai":
+      raw = await callOpenAI({ apiKey, modelId, prompt });
+      break;
+    case "gemini":
+      raw = await callGemini({ apiKey, modelId, prompt });
+      break;
+    case "copilot":
+      raw = await callCopilot({ apiKey, apiBase, modelId, prompt });
+      break;
+    default:
+      throw new Error("No provider selected.");
+  }
+
+  const clean = raw.replace(/```json|```/gi, "").trim();
   const start = clean.indexOf("[");
   const end = clean.lastIndexOf("]");
   const arrStr = start >= 0 && end > start ? clean.slice(start, end + 1) : clean;
@@ -190,30 +346,49 @@ Return format: ["translation1", "translation2", ...]`;
   return parsed;
 }
 
-async function translateAll(enFlat, keys, langName, langNative, onProgress) {
+async function translateAll(
+  enFlat,
+  keys,
+  langName,
+  langNative,
+  providerConfig,
+  onProgress
+) {
   const out = [];
   const chunks = Math.ceil(keys.length / CHUNK);
   for (let i = 0; i < keys.length; i += CHUNK) {
     const chunkIdx = Math.floor(i / CHUNK);
-    const slice = keys.slice(i, i + CHUNK).map((k) => ({ key: k, value: enFlat[k] }));
+    const slice = keys.slice(i, i + CHUNK).map((k) => ({
+      key: k,
+      value: enFlat[k],
+    }));
     onProgress(
       `Chunk ${chunkIdx + 1}/${chunks} — ${slice.length} strings`,
       Math.round(10 + (chunkIdx / chunks) * 80)
     );
-    const translations = await translateChunk(slice, langName, langNative);
-    // Pad/truncate defensively
+    const translations = await translateChunk(
+      slice,
+      langName,
+      langNative,
+      providerConfig
+    );
     const padded = [...translations];
-    while (padded.length < slice.length) padded.push(slice[padded.length]?.value ?? "");
+    while (padded.length < slice.length)
+      padded.push(slice[padded.length]?.value ?? "");
     out.push(...padded.slice(0, slice.length));
   }
   return out;
 }
 
-// ─── JSZip LOADER ─────────────────────────────────────────────────────────────
+/* ───────── JSZip LOADER ───────── */
+
 function useJSZip() {
   const [jszip, setJszip] = useState(null);
   useEffect(() => {
-    if (window.JSZip) { setJszip(() => window.JSZip); return; }
+    if (window.JSZip) {
+      setJszip(() => window.JSZip);
+      return;
+    }
     const s = document.createElement("script");
     s.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
     s.onload = () => setJszip(() => window.JSZip);
@@ -222,9 +397,11 @@ function useJSZip() {
   return jszip;
 }
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+/* ───────── MAIN APP ───────── */
+
 export default function App() {
   const JSZip = useJSZip();
+
   const [activeTab, setActiveTab] = useState("single"); // "single" | "bulk"
   const [enJson, setEnJson] = useState("");
   const [enError, setEnError] = useState("");
@@ -241,17 +418,34 @@ export default function App() {
   const [copied, setCopied] = useState(false);
 
   // Bulk mode
-  const [bulkSelected, setBulkSelected] = useState(() => new Set(LANGUAGES.map((l) => l.code)));
+  const [bulkSelected, setBulkSelected] = useState(
+    () => new Set(LANGUAGES.map((l) => l.code))
+  );
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ step: "", pct: 0 });
   const [bulkResults, setBulkResults] = useState([]);
 
-  const lang = LANGUAGES.find((l) => l.code === selectedLang) || LANGUAGES[0];
+  // Provider config
+  const [provider, setProvider] = useState("claude"); // claude | openai | gemini | copilot
+  const [apiKey, setApiKey] = useState("");
+  const [apiBase, setApiBase] = useState(""); // used for Copilot (Azure‑style)
+  const [modelId, setModelId] = useState("claude-3-5-sonnet-20241022");
+
+  const lang =
+    LANGUAGES.find((l) => l.code === selectedLang) || LANGUAGES[0];
 
   function parseJSON(str, setErr) {
-    if (!str.trim()) { setErr(""); return {}; }
-    try { setErr(""); return JSON.parse(str); }
-    catch (e) { setErr("Invalid JSON: " + e.message); return null; }
+    if (!str.trim()) {
+      setErr("");
+      return {};
+    }
+    try {
+      setErr("");
+      return JSON.parse(str);
+    } catch (e) {
+      setErr("Invalid JSON: " + e.message);
+      return null;
+    }
   }
 
   function analyze() {
@@ -259,36 +453,59 @@ export default function App() {
     if (en === null) return;
     const target = parseJSON(targetJson, setTargetError);
     if (target === null) return;
-    const missing = Object.keys(flattenKeys(en)).filter((k) => !(k in flattenKeys(target)));
+    const missing = Object.keys(flattenKeys(en)).filter(
+      (k) => !(k in flattenKeys(target))
+    );
     setMissingKeys(missing);
     setSingleStatus("analyzed");
   }
 
+  const providerConfig = {
+    provider,
+    apiKey: apiKey.trim(),
+    apiBase: apiBase.trim(),
+    modelId: modelId.trim(),
+  };
+
   async function translate() {
     const en = parseJSON(enJson, setEnError);
     if (en === null) return;
+
     let target = {};
     if (targetJson.trim() && mode === "gap") {
       const t = parseJSON(targetJson, setTargetError);
       if (t === null) return;
       target = t;
     }
+
     const enFlat = flattenKeys(en);
     const targetFlat = flattenKeys(target);
-    const keys = mode === "gap"
-      ? Object.keys(enFlat).filter((k) => !(k in targetFlat))
-      : Object.keys(enFlat);
+    const keys =
+      mode === "gap"
+        ? Object.keys(enFlat).filter((k) => !(k in targetFlat))
+        : Object.keys(enFlat);
 
     if (keys.length === 0) {
       setOutput(JSON.stringify(target, null, 2));
       setSingleStatus("done");
       return;
     }
+
     setSingleStatus("translating");
-    setSingleProgress({ step: `Preparing ${keys.length} keys…`, pct: 5 });
+    setSingleProgress({
+      step: `Preparing ${keys.length} keys…`,
+      pct: 5,
+    });
+
     try {
-      const vals = await translateAll(enFlat, keys, lang.name, lang.native,
-        (step, pct) => setSingleProgress({ step, pct }));
+      const vals = await translateAll(
+        enFlat,
+        keys,
+        lang.name,
+        lang.native,
+        providerConfig,
+        (step, pct) => setSingleProgress({ step, pct })
+      );
       setSingleProgress({ step: "Building file…", pct: 95 });
       const nested = buildNested(keys, vals);
       const final = mode === "gap" ? deepMerge(target, nested) : nested;
@@ -304,6 +521,7 @@ export default function App() {
   async function runBulk() {
     const en = parseJSON(enJson, setEnError);
     if (en === null) return;
+
     const enFlat = flattenKeys(en);
     const keys = Object.keys(enFlat);
     const targets = LANGUAGES.filter((l) => bulkSelected.has(l.code));
@@ -319,17 +537,38 @@ export default function App() {
         step: `(${i + 1}/${targets.length}) ${t.native} — ${t.code}.json`,
         pct: Math.round((i / targets.length) * 100),
       });
+
       try {
-        const vals = await translateAll(enFlat, keys, t.name, t.native, (step) => {
-          setBulkProgress((p) => ({ ...p, step: `(${i + 1}/${targets.length}) ${t.native} — ${step}` }));
-        });
+        const vals = await translateAll(
+          enFlat,
+          keys,
+          t.name,
+          t.native,
+          providerConfig,
+          (step) => {
+            setBulkProgress((p) => ({
+              ...p,
+              step: `(${i + 1}/${targets.length}) ${t.native} — ${step}`,
+            }));
+          }
+        );
         const nested = buildNested(keys, vals);
-        results.push({ code: t.code, native: t.native, json: JSON.stringify(nested, null, 2) });
+        results.push({
+          code: t.code,
+          native: t.native,
+          json: JSON.stringify(nested, null, 2),
+        });
       } catch (e) {
-        results.push({ code: t.code, native: t.native, json: "", error: e.message });
+        results.push({
+          code: t.code,
+          native: t.native,
+          json: "",
+          error: e.message,
+        });
       }
       setBulkResults([...results]);
     }
+
     setBulkProgress({ step: "All done!", pct: 100 });
     setBulkRunning(false);
   }
@@ -345,7 +584,8 @@ export default function App() {
     downloadBlob("locales.zip", blob, "application/zip");
   }
 
-  // ─── RENDER ───────────────────────────────────────────────────────────────
+  /* ───────── RENDER ───────── */
+
   return (
     <div style={styles.root}>
       {/* Animated grid background */}
@@ -357,17 +597,83 @@ export default function App() {
           <div style={styles.logo}>🌐</div>
           <div>
             <div style={styles.appName}>LocaleForge</div>
-            <div style={styles.appSub}>Locale File Translator · {LANGUAGES.length} Languages</div>
+            <div style={styles.appSub}>
+              Locale File Translator · {LANGUAGES.length} Languages · Claude / Gemini / ChatGPT / Copilot
+            </div>
           </div>
         </div>
       </header>
 
       <main style={styles.main}>
+        {/* Provider config */}
+        <Section label="AI Provider · Model & Keys">
+          <div style={styles.row}>
+            <select
+              value={provider}
+              onChange={(e) => {
+                const v = e.target.value;
+                setProvider(v);
+                // simple defaults when switching
+                if (v === "claude") setModelId("claude-3-5-sonnet-20241022");
+                if (v === "openai") setModelId("gpt-4.1-mini");
+                if (v === "gemini") setModelId("gemini-1.5-flash");
+                if (v === "copilot") setModelId("gpt-4o-mini");
+              }}
+              style={styles.select}
+            >
+              <option value="claude">Claude (Anthropic)</option>
+              <option value="openai">ChatGPT (OpenAI)</option>
+              <option value="gemini">Gemini (Google)</option>
+              <option value="copilot">Copilot (Azure‑style endpoint)</option>
+            </select>
+          </div>
+          <div style={styles.row}>
+            <input
+              style={styles.input}
+              placeholder={
+                provider === "gemini"
+                  ? "API Key (Google AI Studio)"
+                  : provider === "openai"
+                  ? "API Key (OpenAI)"
+                  : provider === "copilot"
+                  ? "API Key (Azure / Copilot)"
+                  : "API Key (Anthropic)"
+              }
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+          </div>
+          <div style={styles.row}>
+            <input
+              style={styles.input}
+              placeholder={
+                provider === "copilot"
+                  ? "Base URL (e.g. https://YOUR-RESOURCE.openai.azure.com)"
+                  : "Base URL (optional, Copilot only)"
+              }
+              value={apiBase}
+              onChange={(e) => setApiBase(e.target.value)}
+            />
+          </div>
+          <div style={styles.row}>
+            <input
+              style={styles.input}
+              placeholder="Model ID (e.g. claude-3-5-sonnet-20241022, gpt-4.1-mini, gemini-1.5-flash, gpt-4o-mini)"
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+            />
+          </div>
+        </Section>
+
         {/* en.json input */}
         <Section label="en.json · Source File" error={!!enError}>
           <textarea
             value={enJson}
-            onChange={(e) => { setEnJson(e.target.value); setEnError(""); setSingleStatus("idle"); }}
+            onChange={(e) => {
+              setEnJson(e.target.value);
+              setEnError("");
+              setSingleStatus("idle");
+            }}
             placeholder="Paste your en.json content here…"
             style={styles.ta}
           />
@@ -378,7 +684,9 @@ export default function App() {
                 try {
                   const flat = flattenKeys(JSON.parse(enJson));
                   return `✓ ${Object.keys(flat).length} translation keys loaded`;
-                } catch { return null; }
+                } catch {
+                  return null;
+                }
               })()}
             </div>
           )}
@@ -386,22 +694,45 @@ export default function App() {
 
         {/* Tab bar */}
         <div style={styles.tabBar}>
-          {[["single", "🔠 Single Language"], ["bulk", "🚀 Bulk Export"]].map(([id, label]) => (
-            <button key={id} onClick={() => setActiveTab(id)} style={{ ...styles.tab, ...(activeTab === id ? styles.tabActive : {}) }}>
+          {[
+            ["single", "🔠 Single Language"],
+            ["bulk", "🚀 Bulk Export"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              style={{
+                ...styles.tab,
+                ...(activeTab === id ? styles.tabActive : {}),
+              }}
+            >
               {label}
             </button>
           ))}
         </div>
 
-        {/* ── SINGLE TAB ──────────────────────────────────────────────────── */}
+        {/* SINGLE TAB */}
         {activeTab === "single" && (
           <>
             {/* Mode toggle */}
             <Section label="Mode">
               <div style={styles.row}>
-                {[["gap", "🔍 Fill Missing Keys"], ["full", "🔄 Full Retranslate"]].map(([v, label]) => (
-                  <button key={v} onClick={() => { setMode(v); setSingleStatus("idle"); setOutput(""); }}
-                    style={{ ...styles.modeBtn, ...(mode === v ? styles.modeBtnActive : {}) }}>
+                {[
+                  ["gap", "🔍 Fill Missing Keys"],
+                  ["full", "🔄 Full Retranslate"],
+                ].map(([v, label]) => (
+                  <button
+                    key={v}
+                    onClick={() => {
+                      setMode(v);
+                      setSingleStatus("idle");
+                      setOutput("");
+                    }}
+                    style={{
+                      ...styles.modeBtn,
+                      ...(mode === v ? styles.modeBtnActive : {}),
+                    }}
+                  >
                     {label}
                   </button>
                 ))}
@@ -410,44 +741,94 @@ export default function App() {
 
             {/* Language picker */}
             <Section label="Target Language">
-              <select value={selectedLang}
-                onChange={(e) => { setSelectedLang(e.target.value); setSingleStatus("idle"); setOutput(""); }}
-                style={styles.select}>
+              <select
+                value={selectedLang}
+                onChange={(e) => {
+                  setSelectedLang(e.target.value);
+                  setSingleStatus("idle");
+                  setOutput("");
+                }}
+                style={styles.select}
+              >
                 {LANGUAGES.map((l) => (
-                  <option key={l.code} value={l.code}>{l.native} ({l.name}) — {l.code}.json</option>
+                  <option key={l.code} value={l.code}>
+                    {l.native} ({l.name}) — {l.code}.json
+                  </option>
                 ))}
               </select>
             </Section>
 
             {/* Target JSON (gap mode only) */}
             {mode === "gap" && (
-              <Section label={`${selectedLang}.json · Existing file (optional)`} error={!!targetError}>
-                <textarea value={targetJson}
-                  onChange={(e) => { setTargetJson(e.target.value); setTargetError(""); setSingleStatus("idle"); }}
+              <Section
+                label={`${selectedLang}.json · Existing file (optional)`}
+                error={!!targetError}
+              >
+                <textarea
+                  value={targetJson}
+                  onChange={(e) => {
+                    setTargetJson(e.target.value);
+                    setTargetError("");
+                    setSingleStatus("idle");
+                  }}
                   placeholder={`Paste your existing ${selectedLang}.json here (leave blank to translate all)…`}
-                  style={styles.ta} />
+                  style={styles.ta}
+                />
                 {targetError && <ErrMsg>{targetError}</ErrMsg>}
                 {enJson && (
-                  <button onClick={analyze} style={{ ...styles.btnSecondary, marginTop: 10, width: "100%" }}>
+                  <button
+                    onClick={analyze}
+                    style={{
+                      ...styles.btnSecondary,
+                      marginTop: 10,
+                      width: "100%",
+                    }}
+                  >
                     🔍 Analyze Gap
                   </button>
                 )}
                 {singleStatus === "analyzed" && (
-                  <div style={{
-                    ...styles.infoBox,
-                    background: missingKeys.length === 0 ? "rgba(34,197,94,0.07)" : "rgba(245,158,11,0.07)",
-                    borderColor: missingKeys.length === 0 ? "rgba(34,197,94,0.3)" : "rgba(245,158,11,0.3)",
-                  }}>
+                  <div
+                    style={{
+                      ...styles.infoBox,
+                      background:
+                        missingKeys.length === 0
+                          ? "rgba(34,197,94,0.07)"
+                          : "rgba(245,158,11,0.07)",
+                      borderColor:
+                        missingKeys.length === 0
+                          ? "rgba(34,197,94,0.3)"
+                          : "rgba(245,158,11,0.3)",
+                    }}
+                  >
                     {missingKeys.length === 0 ? (
-                      <div style={{ color: "#22c55e", fontSize: 12 }}>✅ {selectedLang}.json is fully in sync</div>
+                      <div
+                        style={{ color: "#22c55e", fontSize: 12 }}
+                      >{`✅ ${selectedLang}.json is fully in sync`}</div>
                     ) : (
                       <>
-                        <div style={{ color: "#f59e0b", fontSize: 12, marginBottom: 6 }}>
-                          ⚠ {missingKeys.length} missing key{missingKeys.length !== 1 ? "s" : ""}
+                        <div
+                          style={{
+                            color: "#f59e0b",
+                            fontSize: 12,
+                            marginBottom: 6,
+                          }}
+                        >
+                          ⚠ {missingKeys.length} missing key
+                          {missingKeys.length !== 1 ? "s" : ""}
                         </div>
                         <div style={styles.keyList}>
                           {missingKeys.map((k) => (
-                            <div key={k} style={{ fontSize: 10, color: "#f59e0b", lineHeight: 1.9 }}>• {k}</div>
+                            <div
+                              key={k}
+                              style={{
+                                fontSize: 10,
+                                color: "#f59e0b",
+                                lineHeight: 1.9,
+                              }}
+                            >
+                              • {k}
+                            </div>
                           ))}
                         </div>
                       </>
@@ -458,91 +839,260 @@ export default function App() {
             )}
 
             {/* Translate button */}
-            <button onClick={translate}
+            <button
+              onClick={translate}
               disabled={!enJson || singleStatus === "translating"}
-              style={{ ...styles.btnPrimary, opacity: !enJson ? 0.45 : 1 }}>
+              style={{
+                ...styles.btnPrimary,
+                opacity: !enJson ? 0.45 : 1,
+              }}
+            >
               {singleStatus === "translating"
                 ? `⏳ ${singleProgress.step}`
                 : mode === "gap"
-                  ? `🌐 Fill Missing → ${lang.native}`
-                  : `🔄 Retranslate → ${lang.native}`}
+                ? `🌍 Fill Missing → ${lang.native}`
+                : `🔄 Retranslate → ${lang.native}`}
             </button>
 
-            {singleStatus === "translating" && <ProgressBar pct={singleProgress.pct} />}
+            {singleStatus === "translating" && (
+              <ProgressBar pct={singleProgress.pct} />
+            )}
 
             {singleStatus === "error" && (
-              <div style={{ ...styles.infoBox, background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.3)", color: "#f87171", fontSize: 12 }}>
+              <div
+                style={{
+                  ...styles.infoBox,
+                  background: "rgba(239,68,68,0.08)",
+                  borderColor: "rgba(239,68,68,0.3)",
+                  color: "#f87171",
+                  fontSize: 12,
+                }}
+              >
                 ❌ {singleProgress.step}
               </div>
             )}
 
             {singleStatus === "done" && output && (
-              <Section label={`✅ ${selectedLang}.json — ${output.split("\n").length} lines`}>
-                <div style={{ ...styles.row, marginBottom: 10, flexWrap: "wrap" }}>
-                  <button onClick={() => downloadBlob(`${selectedLang}.json`, output)} style={styles.btnSm}>⬇ Download</button>
-                  <button onClick={() => { navigator.clipboard.writeText(output).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2500); }); }} style={styles.btnSmSecondary}>
+              <Section
+                label={`✅ ${selectedLang}.json — ${
+                  output.split("\n").length
+                } lines`}
+              >
+                <div
+                  style={{
+                    ...styles.row,
+                    marginBottom: 10,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    onClick={() =>
+                      downloadBlob(`${selectedLang}.json`, output)
+                    }
+                    style={styles.btnSm}
+                  >
+                    ⬇ Download
+                  </button>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard
+                        .writeText(output)
+                        .then(() => {
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2500);
+                        });
+                    }}
+                    style={styles.btnSmSecondary}
+                  >
                     {copied ? "✓ Copied" : "📋 Copy"}
                   </button>
                 </div>
-                <textarea readOnly value={output} style={{ ...styles.ta, height: 220, color: "#4ade80" }} />
+                <textarea
+                  readOnly
+                  value={output}
+                  style={{
+                    ...styles.ta,
+                    height: 220,
+                    color: "#4ade80",
+                  }}
+                />
               </Section>
             )}
           </>
         )}
 
-        {/* ── BULK TAB ─────────────────────────────────────────────────────── */}
+        {/* BULK TAB */}
         {activeTab === "bulk" && (
           <>
-            <Section label={`Select Languages · ${bulkSelected.size}/${LANGUAGES.length}`}>
+            <Section
+              label={`Select Languages · ${bulkSelected.size}/${LANGUAGES.length}`}
+            >
               <div style={styles.row}>
-                <button onClick={() => setBulkSelected(new Set(LANGUAGES.map((l) => l.code)))} style={styles.btnSmSecondary}>All</button>
-                <button onClick={() => setBulkSelected(new Set())} style={styles.btnSmSecondary}>None</button>
+                <button
+                  onClick={() =>
+                    setBulkSelected(
+                      new Set(LANGUAGES.map((l) => l.code))
+                    )
+                  }
+                  style={styles.btnSmSecondary}
+                >
+                  All
+                </button>
+                <button
+                  onClick={() => setBulkSelected(new Set())}
+                  style={styles.btnSmSecondary}
+                >
+                  None
+                </button>
               </div>
               <div style={styles.langGrid}>
                 {LANGUAGES.map((l) => {
                   const sel = bulkSelected.has(l.code);
                   return (
-                    <label key={l.code} style={{ ...styles.langChk, ...(sel ? styles.langChkActive : {}) }}>
-                      <input type="checkbox" checked={sel}
+                    <label
+                      key={l.code}
+                      style={{
+                        ...styles.langChk,
+                        ...(sel ? styles.langChkActive : {}),
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={sel}
                         onChange={(e) => {
                           const next = new Set(bulkSelected);
-                          e.target.checked ? next.add(l.code) : next.delete(l.code);
+                          e.target.checked
+                            ? next.add(l.code)
+                            : next.delete(l.code);
                           setBulkSelected(next);
                         }}
-                        style={{ accentColor: "#3b82f6", width: 14, height: 14 }} />
-                      <span style={{ fontWeight: 600, color: sel ? "#93c5fd" : "#475569" }}>{l.code}</span>
-                      <span style={{ fontSize: 10, opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.native}</span>
+                        style={{
+                          accentColor: "#3b82f6",
+                          width: 14,
+                          height: 14,
+                        }}
+                      />
+                      <span
+                        style={{
+                          fontWeight: 600,
+                          color: sel ? "#93c5fd" : "#475569",
+                        }}
+                      >
+                        {l.code}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 10,
+                          opacity: 0.7,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {l.native}
+                      </span>
                     </label>
                   );
                 })}
               </div>
             </Section>
 
-            <button onClick={runBulk}
+            <button
+              onClick={runBulk}
               disabled={!enJson || bulkRunning || bulkSelected.size === 0}
-              style={{ ...styles.btnPrimary, opacity: (!enJson || bulkSelected.size === 0) ? 0.45 : 1 }}>
-              {bulkRunning ? `⏳ ${bulkProgress.step}` : `🚀 Generate ${bulkSelected.size} files`}
+              style={{
+                ...styles.btnPrimary,
+                opacity:
+                  !enJson || bulkSelected.size === 0 ? 0.45 : 1,
+              }}
+            >
+              {bulkRunning
+                ? `⏳ ${bulkProgress.step}`
+                : `🚀 Generate ${bulkSelected.size} files`}
             </button>
 
             {bulkRunning && <ProgressBar pct={bulkProgress.pct} />}
 
             {bulkResults.length > 0 && (
-              <Section label={`Results · ${bulkResults.filter((r) => !r.error).length}/${bulkResults.length} ready`}>
-                <div style={{ ...styles.row, marginBottom: 12 }}>
-                  <button onClick={downloadAllZip} disabled={!JSZip} style={styles.btnSm}>
+              <Section
+                label={`Results · ${
+                  bulkResults.filter((r) => !r.error).length
+                }/${bulkResults.length} ready`}
+              >
+                <div
+                  style={{ ...styles.row, marginBottom: 12 }}
+                >
+                  <button
+                    onClick={downloadAllZip}
+                    disabled={!JSZip}
+                    style={styles.btnSm}
+                  >
                     ⬇ Download All (.zip)
                   </button>
                 </div>
                 <div style={styles.resultsGrid}>
                   {bulkResults.map((r) => (
-                    <div key={r.code} style={{ ...styles.resultItem, background: r.error ? "rgba(239,68,68,0.07)" : "rgba(34,197,94,0.05)" }}>
-                      <span style={{ color: r.error ? "#f87171" : "#86efac", fontWeight: 700, fontSize: 11 }}>{r.code}.json</span>
-                      <span style={{ fontSize: 10, opacity: 0.6, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>{r.native}</span>
-                      {r.error
-                        ? <span title={r.error} style={{ color: "#f87171", fontSize: 12 }}>⚠</span>
-                        : <button onClick={() => downloadBlob(`${r.code}.json`, r.json)}
-                            style={{ background: "none", border: "none", color: "#60a5fa", cursor: "pointer", fontSize: 13, padding: 0 }}>⬇</button>
-                      }
+                    <div
+                      key={r.code}
+                      style={{
+                        ...styles.resultItem,
+                        background: r.error
+                          ? "rgba(239,68,68,0.07)"
+                          : "rgba(34,197,94,0.05)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: r.error
+                            ? "#f87171"
+                            : "#86efac",
+                          fontWeight: 700,
+                          fontSize: 11,
+                        }}
+                      >
+                        {r.code}.json
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 10,
+                          opacity: 0.6,
+                          flex: 1,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {r.native}
+                      </span>
+                      {r.error ? (
+                        <span
+                          title={r.error}
+                          style={{
+                            color: "#f87171",
+                            fontSize: 12,
+                          }}
+                        >
+                          ⚠
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() =>
+                            downloadBlob(
+                              `${r.code}.json`,
+                              r.json
+                            )
+                          }
+                          style={{
+                            background: "none",
+                            border: "none",
+                            color: "#60a5fa",
+                            cursor: "pointer",
+                            fontSize: 13,
+                            padding: 0,
+                          }}
+                        >
+                          ⬇
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -558,27 +1108,48 @@ export default function App() {
   );
 }
 
-// ─── SUB-COMPONENTS ───────────────────────────────────────────────────────────
+/* ───────── SUB-COMPONENTS ───────── */
+
 function Section({ label, error, children }) {
   return (
-    <div style={{ ...styles.section, ...(error ? { borderColor: "#ef4444" } : {}) }}>
+    <div
+      style={{
+        ...styles.section,
+        ...(error ? { borderColor: "#ef4444" } : {}),
+      }}
+    >
       <div style={styles.sectionLabel}>{label}</div>
       {children}
     </div>
   );
 }
+
 function ErrMsg({ children }) {
-  return <div style={{ color: "#ef4444", fontSize: 11, marginTop: 6 }}>⚠ {children}</div>;
-}
-function ProgressBar({ pct }) {
   return (
-    <div style={styles.progressTrack}>
-      <div style={{ ...styles.progressFill, width: `${pct}%` }} />
+    <div
+      style={{
+        color: "#ef4444",
+        fontSize: 11,
+        marginTop: 6,
+      }}
+    >
+      ⚠ {children}
     </div>
   );
 }
 
-// ─── STYLES ───────────────────────────────────────────────────────────────────
+function ProgressBar({ pct }) {
+  return (
+    <div style={styles.progressTrack}>
+      <div
+        style={{ ...styles.progressFill, width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
+/* ───────── STYLES ───────── */
+
 const styles = {
   root: {
     minHeight: "100vh",
@@ -591,10 +1162,8 @@ const styles = {
   gridBg: {
     position: "fixed",
     inset: 0,
-    backgroundImage: `
-      linear-gradient(rgba(0,71,171,0.06) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,71,171,0.06) 1px, transparent 1px)
-    `,
+    backgroundImage:
+      "linear-gradient(rgba(0,71,171,0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(0,71,171,0.06) 1px, transparent 1px)",
     backgroundSize: "40px 40px",
     pointerEvents: "none",
     zIndex: 0,
@@ -603,7 +1172,8 @@ const styles = {
     position: "sticky",
     top: 0,
     zIndex: 100,
-    background: "linear-gradient(135deg, rgba(0,47,120,0.97) 0%, rgba(0,15,50,0.97) 100%)",
+    background:
+      "linear-gradient(135deg, rgba(0,47,120,0.97) 0%, rgba(0,15,50,0.97) 100%)",
     borderBottom: "1px solid rgba(0,100,220,0.25)",
     backdropFilter: "blur(12px)",
     WebkitBackdropFilter: "blur(12px)",
@@ -678,6 +1248,18 @@ const styles = {
     outline: "none",
     boxSizing: "border-box",
     lineHeight: 1.6,
+  },
+  input: {
+    width: "100%",
+    background: "#040a18",
+    border: "1px solid rgba(0,71,171,0.35)",
+    borderRadius: 8,
+    color: "#e2e8f0",
+    padding: "9px 11px",
+    fontSize: 11,
+    fontFamily: "inherit",
+    outline: "none",
+    boxSizing: "border-box",
   },
   jsonStat: {
     fontSize: 10,
