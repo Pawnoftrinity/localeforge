@@ -220,7 +220,7 @@ async function callOpenAI({ apiKey, modelId, prompt }) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: modelId || "gpt-4.1-mini",
+      model: modelId || "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
       max_tokens: 1000,
     }),
@@ -615,7 +615,7 @@ export default function App() {
                 setProvider(v);
                 // simple defaults when switching
                 if (v === "claude") setModelId("claude-3-5-sonnet-20241022");
-                if (v === "openai") setModelId("gpt-4.1-mini");
+                if (v === "openai") setModelId("gpt-4o-mini");
                 if (v === "gemini") setModelId("gemini-1.5-flash");
                 if (v === "copilot") setModelId("gpt-4o-mini");
               }}
@@ -658,7 +658,7 @@ export default function App() {
           <div style={styles.row}>
             <input
               style={styles.input}
-              placeholder="Model ID (e.g. claude-3-5-sonnet-20241022, gpt-4.1-mini, gemini-1.5-flash, gpt-4o-mini)"
+              placeholder="Model ID (e.g. claude-3-5-sonnet-20241022, gpt-4o-mini, gemini-1.5-flash, gpt-4o-mini)"
               value={modelId}
               onChange={(e) => setModelId(e.target.value)}
             />
