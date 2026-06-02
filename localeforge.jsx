@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+const { useState, useEffect, useCallback } = React;
 
 /* ══════════════════════════════════════════════════════════
    LANGUAGES  (100 locales)
@@ -455,7 +455,7 @@ function useJSZip() {
 /* ══════════════════════════════════════════════════════════
    MAIN APP
 ══════════════════════════════════════════════════════════ */
-export default function App() {
+function App() {
   const JSZip = useJSZip();
   const [settings, setSettings] = useState(loadSettings);
   const [mainTab, setMainTab] = useState("translate");    // translate | appwrite
@@ -1119,5 +1119,5 @@ const S = {
   resultItem: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.04)", overflow: "hidden" },
 };
 
-// Browser mount bridge — registers App for Index.html's inline loader
-if (typeof window !== 'undefined') window.__localeForgeApp = App;
+// Mount directly — no bundler needed
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));

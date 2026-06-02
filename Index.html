@@ -5,174 +5,45 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LocaleForge · HTM Locale Generator</title>
 
-    <!-- Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌐</text></svg>" />
-
-    <!-- Google Font -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet" />
 
-    <!-- React 18 + ReactDOM (UMD / browser build — no bundler needed) -->
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- React 18 -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
-    <!-- Babel standalone so JSX works in the browser -->
+    <!-- Babel (JSX in browser) -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-    <!-- JSZip for bulk .zip download -->
+    <!-- JSZip (bulk export) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <style>
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-      html { scroll-behavior: smooth; }
-
       body {
         background: #060d1f;
         color: #e2e8f0;
-        font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
         -webkit-font-smoothing: antialiased;
         min-height: 100vh;
       }
-
-      /* Scrollbars */
       ::-webkit-scrollbar { width: 6px; height: 6px; }
       ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
       ::-webkit-scrollbar-thumb { background: rgba(0,71,171,0.5); border-radius: 3px; }
-      ::-webkit-scrollbar-thumb:hover { background: rgba(0,71,171,0.8); }
-
-      /* Selection */
       ::selection { background: rgba(0,71,171,0.45); color: #fff; }
-
-      /* Input / select / textarea focus ring */
       input:focus, select:focus, textarea:focus {
         outline: none;
         border-color: rgba(0,100,255,0.55) !important;
         box-shadow: 0 0 0 2px rgba(0,71,171,0.18);
       }
-
-      /* Loading splash shown while React bootstraps */
-      #splash {
-        position: fixed; inset: 0;
-        background: #060d1f;
-        display: flex; flex-direction: column;
-        align-items: center; justify-content: center;
-        gap: 16px; z-index: 9999;
-        transition: opacity 0.4s ease;
-      }
-      #splash.hidden { opacity: 0; pointer-events: none; }
-      #splash-icon { font-size: 48px; animation: pulse 1.4s ease-in-out infinite; }
-      #splash-text { font-size: 13px; color: rgba(0,229,255,0.7); letter-spacing: 0.1em; }
-      #splash-bar {
-        width: 160px; height: 3px;
-        background: rgba(0,71,171,0.25);
-        border-radius: 2px; overflow: hidden;
-      }
-      #splash-fill {
-        height: 100%;
-        background: linear-gradient(90deg, #0047AB, #00d4ff);
-        border-radius: 2px;
-        animation: load 1.2s ease-in-out infinite alternate;
-      }
-
-      @keyframes pulse {
-        0%, 100% { transform: scale(1); opacity: 1; }
-        50%       { transform: scale(1.12); opacity: 0.75; }
-      }
-      @keyframes load {
-        from { width: 10%; }
-        to   { width: 90%; }
-      }
     </style>
   </head>
-
   <body>
-    <!-- Loading splash -->
-    <div id="splash">
-      <div id="splash-icon">🌐</div>
-      <div id="splash-text">LOCALEFORGE · INITIALISING</div>
-      <div id="splash-bar"><div id="splash-fill"></div></div>
-    </div>
-
-    <!-- React root -->
     <div id="root"></div>
 
-    <!--
-      LocaleForge component.
-      Babel transforms JSX + ES modules syntax in-browser.
-      The "type=text/babel" attribute tells Babel to process this tag.
-      data-presets="react" ensures JSX is handled.
-      data-type="module" enables import/export inside Babel's transform.
-    -->
-    <script type="text/babel" data-presets="react" data-type="module" src="localeforge.jsx"></script>
-
-    <script>
-      // Mount after Babel has transformed localeforge.jsx.
-      // Babel fires a custom "babelLoaded" event when the last script tag
-      // finishes processing; we can also poll for the default export.
-      function mountApp() {
-        const root = document.getElementById("root");
-        if (!root) return;
-
-        // The Babel-transformed module exposes default export on window via
-        // data-type="module" interop. If it doesn't arrive in 10 s, bail.
-        let attempts = 0;
-        const interval = setInterval(() => {
-          attempts++;
-
-          // ReactDOM 18 createRoot
-          if (window.__localeForgeApp) {
-            clearInterval(interval);
-            ReactDOM.createRoot(root).render(
-              React.createElement(window.__localeForgeApp)
-            );
-            hideSplash();
-            return;
-          }
-
-          if (attempts > 200) {
-            clearInterval(interval);
-            root.innerHTML =
-              '<div style="color:#f87171;padding:40px;font-family:monospace;font-size:13px">' +
-              '⚠ LocaleForge failed to load.<br><br>' +
-              'Make sure <code>localeforge.jsx</code> is in the same folder as <code>Index.html</code>.' +
-              '</div>';
-            hideSplash();
-          }
-        }, 50);
-      }
-
-      function hideSplash() {
-        const splash = document.getElementById("splash");
-        if (splash) {
-          splash.classList.add("hidden");
-          setTimeout(() => splash.remove(), 450);
-        }
-      }
-
-      // Kick off mounting after the page loads
-      window.addEventListener("load", mountApp);
-    </script>
-
-    <!--
-      Bridge: localeforge.jsx uses `export default App`.
-      Babel's in-browser module transform doesn't auto-register the default
-      export on window, so we add a tiny shim at the bottom of localeforge.jsx
-      (handled below via an inline Babel script that runs after the JSX).
-
-      Alternatively — and more robustly — we register it here by listening
-      for Babel's done callback via MutationObserver on #root, or simply
-      patch the JSX file to include:
-
-        window.__localeForgeApp = App;
-
-      at the very end. The line is already added in localeforge.jsx output.
-      If you're using this with a bundler (Vite / CRA), remove this entire
-      <script> block and replace with a normal:
-
-        import App from './localeforge.jsx';
-        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-    -->
+    <!-- LocaleForge — mounts itself via ReactDOM.createRoot at the bottom -->
+    <script type="text/babel" data-presets="react" src="localeforge.jsx"></script>
   </body>
 </html>
