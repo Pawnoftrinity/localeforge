@@ -150,6 +150,24 @@ const PROVIDERS = {
     keyLabel: "Azure API Key", keyPlaceholder: "...",
     hasBaseUrl: true,
   },
+   openrouter: {
+  label: "OpenRouter",
+  sub: "OpenRouter.ai",
+  icon: "🟣",
+  models: [
+    "openai/gpt-4o",
+    "openai/gpt-4.1-mini",
+    "anthropic/claude-sonnet-4",
+    "anthropic/claude-opus-4",
+    "google/gemini-2.5-pro",
+    "google/gemini-2.5-flash",
+    "meta-llama/llama-4-maverick",
+    "mistralai/mistral-large"
+  ],
+  defaultModel: "openai/gpt-4.1-mini",
+  keyLabel: "OpenRouter API Key",
+  keyPlaceholder: "sk-or-v1-..."
+ },
 };
 const PIDS = Object.keys(PROVIDERS);
 const CHUNK = 20;
@@ -292,6 +310,42 @@ async function callCopilot({ apiKey, apiBase, modelId, prompt }) {
   return (await res.json()).choices?.[0]?.message?.content ?? "[]";
 }
 
+async function callOpenRouter({ apiKey, modelId, prompt }) {
+  const res = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "LocaleForge"
+      },
+      body: JSON.stringify({
+        model: modelId || "openai/gpt-4.1-mini",
+        messages: [
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        max_tokens: 1024
+      })
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error(
+      `OpenRouter ${res.status}: ${(await res.text()).slice(0, 200)}`
+    );
+  }
+
+  return (
+    (await res.json()).choices?.[0]?.message?.content ??
+    "[]"
+  );
+}
+
 async function dispatchProvider(cfg, prompt) {
   const { provider, apiKey, apiBase, modelId } = cfg;
   if (!apiKey) throw new Error(`API key required for ${provider}.`);
@@ -302,6 +356,7 @@ async function dispatchProvider(cfg, prompt) {
     case "mistral": return callMistral({ apiKey, modelId, prompt });
     case "groq":    return callGroq({ apiKey, modelId, prompt });
     case "copilot": return callCopilot({ apiKey, apiBase, modelId, prompt });
+    case "openrouter": return callOpenRouter({ apiKey, modelId, prompt });
     default: throw new Error("Unknown provider.");
   }
 }
