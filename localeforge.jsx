@@ -158,8 +158,7 @@ const PROVIDERS = {
   },
 };
 const PIDS = Object.keys(PROVIDERS);
-const CHUNK = 20;
-const STORAGE_KEY = "localeforge_v2";
+const STORAGE_KEY = "localeforge_v3";
 
 /* ══════════════════════════════════════════════════════════
    JSON HELPERS
@@ -221,7 +220,7 @@ async function callClaude({ apiKey, modelId, prompt }) {
     },
     body: JSON.stringify({
       model: modelId || "claude-sonnet-4-6",
-      max_tokens: 1024,
+      max_tokens: 4096,
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -236,7 +235,7 @@ async function callOpenAI({ apiKey, modelId, prompt }) {
     body: JSON.stringify({
       model: modelId || "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 1024,
+      max_tokens: 4096,
     }),
   });
   if (!res.ok) throw new Error(`OpenAI ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -264,7 +263,7 @@ async function callMistral({ apiKey, modelId, prompt }) {
     body: JSON.stringify({
       model: modelId || "mistral-small-latest",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 1024,
+      max_tokens: 4096,
     }),
   });
   if (!res.ok) throw new Error(`Mistral ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -278,7 +277,7 @@ async function callGroq({ apiKey, modelId, prompt }) {
     body: JSON.stringify({
       model: modelId || "llama-3.3-70b-versatile",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 1024,
+      max_tokens: 4096,
     }),
   });
   if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 200)}`);
@@ -292,7 +291,7 @@ async function callCopilot({ apiKey, apiBase, modelId, prompt }) {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "api-key": apiKey },
-    body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 1024 }),
+    body: JSON.stringify({ messages: [{ role: "user", content: prompt }], max_tokens: 4096 }),
   });
   if (!res.ok) throw new Error(`Copilot ${res.status}: ${(await res.text()).slice(0, 200)}`);
   return (await res.json()).choices?.[0]?.message?.content ?? "[]";
@@ -308,13 +307,9 @@ async function callOpenRouter({ apiKey, modelId, prompt }) {
       },
       body: JSON.stringify({
         model: modelId || "openai/gpt-4.1-mini",
-        messages: [
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        max_tokens: 1024
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 4096,
+        stream: false,
       })
     }
   );
@@ -400,6 +395,13 @@ async function awDeleteFile(cfg, fileId) {
 /* ══════════════════════════════════════════════════════════
    TRANSLATION ENGINE
 ══════════════════════════════════════════════════════════ */
+const CHUNK = 12; // Reduced from 20 — prevents token truncation on complex scripts
+const RETRY_ATTEMPTS = 3;
+const CHUNK_DELAY_MS = 600;   // Delay between chunks — avoids rate limits
+const LANG_DELAY_MS = 1200;   // Delay between languages in bulk
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
 function buildPrompt(pairs, langName, langNative) {
   const lines = pairs.map((p, i) => `${i + 1}. [${p.key}] ${JSON.stringify(p.value)}`).join("\n");
   return `You are a professional medical equipment terminology translator for a healthcare technology management (HTM) app used by Biomedical Equipment Technicians (BMETs).
@@ -414,22 +416,39 @@ RULES:
 - Use natural, professional medical/technical language for healthcare professionals
 - For RTL languages (Arabic, Hebrew, Persian, Kurdish) use proper RTL text
 - Return ONLY the JSON array — no explanation, no markdown, no backticks
+- The array MUST have exactly ${pairs.length} elements, one per input string
 
-Input strings:
+Input strings (${pairs.length} total):
 ${lines}
 
-Return format:
+Return format (${pairs.length} items):
 ["translation1", "translation2", ...]`;
 }
 
-async function translateChunk(pairs, langName, langNative, cfg) {
-  const raw = await dispatchProvider(cfg, buildPrompt(pairs, langName, langNative));
-  const clean = raw.replace(/```json|```/gi, "").trim();
-  const s = clean.indexOf("["), e = clean.lastIndexOf("]");
-  const arrStr = s >= 0 && e > s ? clean.slice(s, e + 1) : clean;
-  const parsed = JSON.parse(arrStr);
-  if (!Array.isArray(parsed)) throw new Error("Model did not return a JSON array.");
-  return parsed;
+async function translateChunkWithRetry(pairs, langName, langNative, cfg) {
+  let lastErr;
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    try {
+      const raw = await dispatchProvider(cfg, buildPrompt(pairs, langName, langNative));
+      const clean = raw.replace(/```json|```/gi, "").trim();
+      const s = clean.indexOf("["), e = clean.lastIndexOf("]");
+      if (s < 0 || e <= s) throw new Error("No JSON array found in response.");
+      const arrStr = clean.slice(s, e + 1);
+      const parsed = JSON.parse(arrStr);
+      if (!Array.isArray(parsed)) throw new Error("Response is not a JSON array.");
+      // Pad if model returned fewer items than expected
+      while (parsed.length < pairs.length) parsed.push(pairs[parsed.length]?.value ?? "");
+      return parsed.slice(0, pairs.length);
+    } catch (e) {
+      lastErr = e;
+      if (attempt < RETRY_ATTEMPTS) {
+        await sleep(attempt * 1500); // Exponential backoff: 1.5s, 3s
+      }
+    }
+  }
+  // All retries failed — return original English values as fallback
+  console.warn(`Chunk failed after ${RETRY_ATTEMPTS} attempts:`, lastErr?.message);
+  return pairs.map((p) => p.value); // Graceful fallback: keep English
 }
 
 async function translateAll(enFlat, keys, langName, langNative, cfg, onProgress) {
@@ -439,10 +458,9 @@ async function translateAll(enFlat, keys, langName, langNative, cfg, onProgress)
     const ci = Math.floor(i / CHUNK);
     const slice = keys.slice(i, i + CHUNK).map((k) => ({ key: k, value: enFlat[k] }));
     onProgress(`Chunk ${ci + 1}/${chunks} — ${slice.length} strings`, Math.round(10 + (ci / chunks) * 80));
-    const trans = await translateChunk(slice, langName, langNative, cfg);
-    const padded = [...trans];
-    while (padded.length < slice.length) padded.push(slice[padded.length]?.value ?? "");
-    out.push(...padded.slice(0, slice.length));
+    const trans = await translateChunkWithRetry(slice, langName, langNative, cfg);
+    out.push(...trans);
+    if (i + CHUNK < keys.length) await sleep(CHUNK_DELAY_MS); // Rate limit guard
   }
   return out;
 }
@@ -498,7 +516,10 @@ function useJSZip() {
 function App() {
   const JSZip = useJSZip();
   const [settings, setSettings] = useState(loadSettings);
-  const [mainTab, setMainTab] = useState("translate");    // translate | appwrite
+  const [darkMode, setDarkMode] = useState(() => {
+    try { return localStorage.getItem("localeforge_theme") !== "light"; } catch { return true; }
+  });
+  const [mainTab, setMainTab] = useState("translate");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Source JSON
@@ -623,6 +644,7 @@ function App() {
         results.push({ code: t.code, native: t.native, json: JSON.stringify(buildNested(keys, vals), null, 2) });
       } catch (e) { results.push({ code: t.code, native: t.native, json: "", error: e.message }); }
       setBulkResults([...results]);
+      if (i < targets.length - 1) await sleep(LANG_DELAY_MS); // Avoid rate limits between languages
     }
     setBulkProgress({ step: "All done!", pct: 100 });
     setBulkRunning(false);
@@ -666,6 +688,9 @@ function App() {
     if (mainTab === "appwrite" && awReady && awFiles.length === 0 && !awLoading) loadAwFiles();
   }, [mainTab]);
 
+  const T = darkMode ? THEME_DARK : THEME_LIGHT;
+  S = makeStyles(T); // Update global styles on every render
+
   /* ── RENDER ─────────────────────────────────────────── */
   return (
     <div style={S.root}>
@@ -681,6 +706,13 @@ function App() {
               HTM · {LANGUAGES.length} locales · {PIDS.length} AI providers · Appwrite
             </div>
           </div>
+          <button onClick={() => {
+            const next = !darkMode;
+            setDarkMode(next);
+            try { localStorage.setItem("localeforge_theme", next ? "dark" : "light"); } catch {}
+          }} style={{ ...S.settingsBtn, marginRight: 4 }} title="Toggle light/dark mode">
+            {darkMode ? "☀" : "🌙"}
+          </button>
           <button onClick={() => setSettingsOpen((o) => !o)} style={S.settingsBtn}>
             {settingsOpen ? "✕ Close" : "⚙ Settings"}
           </button>
@@ -1101,63 +1133,83 @@ function ProgressBar({ pct }) {
 }
 
 /* ══════════════════════════════════════════════════════════
-   STYLES
+   THEME TOKENS
 ══════════════════════════════════════════════════════════ */
-const S = {
-  root: { minHeight: "100vh", background: "#060d1f", color: "#e2e8f0", fontFamily: "'JetBrains Mono','Fira Code','Courier New',monospace", position: "relative", overflowX: "hidden" },
-  gridBg: { position: "fixed", inset: 0, backgroundImage: "linear-gradient(rgba(0,71,171,0.06) 1px,transparent 1px),linear-gradient(90deg,rgba(0,71,171,0.06) 1px,transparent 1px)", backgroundSize: "40px 40px", pointerEvents: "none", zIndex: 0 },
-  header: { position: "sticky", top: 0, zIndex: 100, background: "linear-gradient(135deg,rgba(0,47,120,0.97) 0%,rgba(0,15,50,0.97) 100%)", borderBottom: "1px solid rgba(0,100,220,0.25)", backdropFilter: "blur(12px)", padding: "12px 16px" },
-  headerInner: { display: "flex", alignItems: "center", gap: 12, maxWidth: 720, margin: "0 auto" },
-  logo: { width: 36, height: 36, background: "rgba(0,71,171,0.4)", border: "1px solid rgba(0,180,255,0.25)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 },
-  appName: { fontWeight: 800, fontSize: 14, color: "#fff", letterSpacing: "0.06em" },
-  appSub: { fontSize: 10, color: "rgba(0,229,255,0.65)", marginTop: 1, letterSpacing: "0.04em" },
-  settingsBtn: { padding: "7px 12px", background: "rgba(0,71,171,0.25)", border: "1px solid rgba(0,100,255,0.3)", borderRadius: 8, color: "#93c5fd", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 },
-  main: { maxWidth: 720, margin: "0 auto", padding: "16px 12px", position: "relative", zIndex: 1, display: "flex", flexDirection: "column", gap: 12 },
-  // Drawer
-  drawer: { background: "rgba(0,20,60,0.96)", border: "1px solid rgba(0,71,171,0.45)", borderRadius: 14, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 0 },
-  drawerSection: { fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700, marginBottom: 10 },
-  pills: { display: "flex", gap: 6, flexWrap: "wrap" },
-  pill: { padding: "6px 10px", borderRadius: 20, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)", color: "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
-  pillOn: { border: "1px solid rgba(0,100,255,0.6)", background: "rgba(0,71,171,0.3)", color: "#93c5fd" },
-  // Cards
-  section: { background: "rgba(255,255,255,0.028)", border: "1px solid rgba(0,71,171,0.28)", borderRadius: 14, padding: "14px 14px" },
-  sectionLabel: { fontSize: 10, color: "#475569", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10, fontWeight: 700 },
-  // Form controls
-  ta: { width: "100%", height: 110, background: "#040a18", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8, color: "#94a3b8", padding: "10px 12px", fontSize: 11, fontFamily: "monospace", resize: "vertical", outline: "none", boxSizing: "border-box", lineHeight: 1.6 },
-  input: { width: "100%", background: "#040a18", border: "1px solid rgba(0,71,171,0.35)", borderRadius: 8, color: "#e2e8f0", padding: "9px 11px", fontSize: 11, fontFamily: "inherit", outline: "none", boxSizing: "border-box" },
-  select: { width: "100%", background: "#040a18", border: "1px solid rgba(0,71,171,0.35)", borderRadius: 8, color: "#e2e8f0", padding: "10px 12px", fontSize: 12, outline: "none", fontFamily: "inherit" },
-  // Tabs
-  tabBar: { display: "flex", gap: 6, background: "rgba(0,0,0,0.3)", padding: 4, borderRadius: 12, border: "1px solid rgba(0,71,171,0.2)" },
-  tab: { flex: 1, padding: "10px 8px", borderRadius: 9, border: "none", background: "transparent", color: "#475569", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s" },
-  tabOn: { background: "linear-gradient(135deg,#0047AB,#002d7a)", color: "#e2e8f0", boxShadow: "0 2px 8px rgba(0,71,171,0.4)" },
-  subBar: { display: "flex", gap: 5, background: "rgba(0,0,0,0.2)", padding: 3, borderRadius: 10 },
-  subTab: { flex: 1, padding: "8px 6px", borderRadius: 8, border: "1px solid transparent", background: "transparent", color: "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
-  subTabOn: { background: "rgba(0,71,171,0.22)", color: "#93c5fd", border: "1px solid rgba(0,71,171,0.35)" },
-  // Badge
-  badge: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "6px 10px", background: "rgba(0,71,171,0.08)", borderRadius: 8, border: "1px solid rgba(0,71,171,0.2)", flexWrap: "wrap" },
-  changeBtn: { marginLeft: "auto", fontSize: 10, color: "#60a5fa", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0 },
-  // Mode buttons
-  modeBtn: { flex: 1, padding: "10px 8px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.06)", background: "rgba(255,255,255,0.02)", color: "#475569", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" },
-  modeBtnOn: { border: "1px solid rgba(0,100,255,0.5)", background: "rgba(0,71,171,0.2)", color: "#93c5fd" },
-  // Info box
-  infoBox: { borderRadius: 10, border: "1px solid", padding: "10px 12px" },
-  // Primary button
-  btnPrimary: { width: "100%", padding: "14px 16px", background: "linear-gradient(135deg,#0047AB 0%,#002d7a 100%)", border: "1px solid rgba(0,71,171,0.5)", borderRadius: 12, color: "#fff", fontSize: 13, fontWeight: 800, letterSpacing: "0.04em", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 16px rgba(0,71,171,0.3)", transition: "opacity 0.15s" },
-  btnSec: { padding: "10px 16px", background: "rgba(0,71,171,0.12)", border: "1px solid rgba(0,71,171,0.35)", borderRadius: 8, color: "#60a5fa", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 },
-  btnSm: { padding: "8px 14px", background: "linear-gradient(135deg,#0047AB,#002d7a)", border: "1px solid rgba(0,71,171,0.5)", borderRadius: 8, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
-  btnSmSec: { padding: "8px 14px", background: "rgba(0,71,171,0.1)", border: "1px solid rgba(0,71,171,0.3)", borderRadius: 8, color: "#60a5fa", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
-  iconBtn: { background: "none", border: "none", cursor: "pointer", fontSize: 15, padding: "2px 4px", lineHeight: 1 },
-  // Progress
-  progressTrack: { background: "rgba(255,255,255,0.05)", borderRadius: 6, height: 4, overflow: "hidden", marginTop: 10 },
-  progressFill: { height: "100%", background: "linear-gradient(90deg,#0047AB,#00d4ff)", transition: "width 0.35s ease", borderRadius: 6 },
-  // Lang grid
-  langGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 6, maxHeight: 280, overflowY: "auto", background: "#030810", padding: 10, borderRadius: 8, marginTop: 10 },
-  langChk: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#475569", cursor: "pointer", padding: "5px 6px", borderRadius: 6, border: "1px solid transparent" },
-  langChkOn: { background: "rgba(0,71,171,0.12)", border: "1px solid rgba(0,71,171,0.25)", color: "#e2e8f0" },
-  // Results grid
-  resultsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 6, maxHeight: 260, overflowY: "auto", background: "#030810", padding: 10, borderRadius: 8 },
-  resultItem: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "7px 10px", borderRadius: 7, border: "1px solid rgba(255,255,255,0.04)", overflow: "hidden" },
+const THEME_DARK = {
+  bg: "#060d1f", surface: "rgba(255,255,255,0.028)", surfaceHover: "rgba(255,255,255,0.05)",
+  border: "rgba(0,71,171,0.28)", borderStrong: "rgba(0,71,171,0.45)",
+  text: "#e2e8f0", textMuted: "#64748b", textDim: "#475569",
+  accent: "#93c5fd", accentDim: "#60a5fa", accentGreen: "#86efac",
+  headerBg: "linear-gradient(135deg,rgba(0,47,120,0.97) 0%,rgba(0,15,50,0.97) 100%)",
+  drawerBg: "rgba(0,20,60,0.96)", inputBg: "#040a18",
+  langGridBg: "#030810", tabBarBg: "rgba(0,0,0,0.3)",
+  subBarBg: "rgba(0,0,0,0.2)", badgeBg: "rgba(0,71,171,0.08)",
+  pillBg: "rgba(255,255,255,0.03)", pillBorder: "rgba(255,255,255,0.08)",
+  modeBtnBg: "rgba(255,255,255,0.02)", modeBtnBorder: "rgba(255,255,255,0.06)",
 };
+const THEME_LIGHT = {
+  bg: "#f0f4ff", surface: "#ffffff", surfaceHover: "#f8faff",
+  border: "rgba(0,71,171,0.18)", borderStrong: "rgba(0,71,171,0.3)",
+  text: "#0f172a", textMuted: "#64748b", textDim: "#94a3b8",
+  accent: "#1d4ed8", accentDim: "#2563eb", accentGreen: "#16a34a",
+  headerBg: "linear-gradient(135deg,#1d4ed8 0%,#1e40af 100%)",
+  drawerBg: "#ffffff", inputBg: "#f8faff",
+  langGridBg: "#f1f5ff", tabBarBg: "rgba(0,71,171,0.06)",
+  subBarBg: "rgba(0,71,171,0.04)", badgeBg: "rgba(0,71,171,0.05)",
+  pillBg: "rgba(0,71,171,0.04)", pillBorder: "rgba(0,71,171,0.15)",
+  modeBtnBg: "rgba(0,71,171,0.03)", modeBtnBorder: "rgba(0,71,171,0.15)",
+};
+
+/* ══════════════════════════════════════════════════════════
+   STYLES  (computed from theme tokens)
+══════════════════════════════════════════════════════════ */
+function makeStyles(T) { return {
+  root: { minHeight: "100vh", background: T.bg, color: T.text, fontFamily: "'JetBrains Mono','Fira Code','Courier New',monospace", position: "relative", overflowX: "hidden", transition: "background 0.2s, color 0.2s" },
+  gridBg: { position: "fixed", inset: 0, backgroundImage: "linear-gradient(rgba(0,71,171,0.05) 1px,transparent 1px),linear-gradient(90deg,rgba(0,71,171,0.05) 1px,transparent 1px)", backgroundSize: "40px 40px", pointerEvents: "none", zIndex: 0 },
+  header: { position: "sticky", top: 0, zIndex: 100, background: T.headerBg, borderBottom: `1px solid ${T.border}`, backdropFilter: "blur(12px)", padding: "12px 16px" },
+  headerInner: { display: "flex", alignItems: "center", gap: 12, maxWidth: 720, margin: "0 auto" },
+  logo: { width: 36, height: 36, background: "rgba(0,71,171,0.3)", border: `1px solid rgba(0,180,255,0.25)`, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 },
+  appName: { fontWeight: 800, fontSize: 14, color: "#fff", letterSpacing: "0.06em" },
+  appSub: { fontSize: 10, color: "rgba(200,230,255,0.8)", marginTop: 1, letterSpacing: "0.04em" },
+  settingsBtn: { padding: "7px 12px", background: "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.25)", borderRadius: 8, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0 },
+  main: { maxWidth: 720, margin: "0 auto", padding: "16px 12px", position: "relative", zIndex: 1, display: "flex", flexDirection: "column", gap: 12 },
+  drawer: { background: T.drawerBg, border: `1px solid ${T.borderStrong}`, borderRadius: 14, padding: "16px 14px", display: "flex", flexDirection: "column", gap: 0, boxShadow: "0 4px 24px rgba(0,71,171,0.1)" },
+  drawerSection: { fontSize: 10, color: T.textMuted, letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700, marginBottom: 10 },
+  pills: { display: "flex", gap: 6, flexWrap: "wrap" },
+  pill: { padding: "6px 10px", borderRadius: 20, border: `1px solid ${T.pillBorder}`, background: T.pillBg, color: T.textDim, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  pillOn: { border: "1px solid rgba(0,100,255,0.6)", background: "rgba(0,71,171,0.2)", color: T.accent },
+  section: { background: T.surface, border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 14px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" },
+  sectionLabel: { fontSize: 10, color: T.textMuted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10, fontWeight: 700 },
+  ta: { width: "100%", height: 110, background: T.inputBg, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text, padding: "10px 12px", fontSize: 11, fontFamily: "monospace", resize: "vertical", outline: "none", boxSizing: "border-box", lineHeight: 1.6 },
+  input: { width: "100%", background: T.inputBg, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text, padding: "9px 11px", fontSize: 11, fontFamily: "inherit", outline: "none", boxSizing: "border-box" },
+  select: { width: "100%", background: T.inputBg, border: `1px solid ${T.border}`, borderRadius: 8, color: T.text, padding: "10px 12px", fontSize: 12, outline: "none", fontFamily: "inherit" },
+  tabBar: { display: "flex", gap: 6, background: T.tabBarBg, padding: 4, borderRadius: 12, border: `1px solid ${T.border}` },
+  tab: { flex: 1, padding: "10px 8px", borderRadius: 9, border: "none", background: "transparent", color: T.textDim, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s" },
+  tabOn: { background: "linear-gradient(135deg,#0047AB,#002d7a)", color: "#fff", boxShadow: "0 2px 8px rgba(0,71,171,0.35)" },
+  subBar: { display: "flex", gap: 5, background: T.subBarBg, padding: 3, borderRadius: 10 },
+  subTab: { flex: 1, padding: "8px 6px", borderRadius: 8, border: "1px solid transparent", background: "transparent", color: T.textDim, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  subTabOn: { background: "rgba(0,71,171,0.15)", color: T.accent, border: `1px solid ${T.border}` },
+  badge: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "6px 10px", background: T.badgeBg, borderRadius: 8, border: `1px solid ${T.border}`, flexWrap: "wrap" },
+  changeBtn: { marginLeft: "auto", fontSize: 10, color: T.accentDim, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0 },
+  modeBtn: { flex: 1, padding: "10px 8px", borderRadius: 8, border: `1px solid ${T.modeBtnBorder}`, background: T.modeBtnBg, color: T.textDim, cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit" },
+  modeBtnOn: { border: "1px solid rgba(0,100,255,0.5)", background: "rgba(0,71,171,0.15)", color: T.accent },
+  infoBox: { borderRadius: 10, border: "1px solid", padding: "10px 12px" },
+  btnPrimary: { width: "100%", padding: "14px 16px", background: "linear-gradient(135deg,#0047AB 0%,#002d7a 100%)", border: "1px solid rgba(0,71,171,0.5)", borderRadius: 12, color: "#fff", fontSize: 13, fontWeight: 800, letterSpacing: "0.04em", cursor: "pointer", fontFamily: "inherit", boxShadow: "0 4px 16px rgba(0,71,171,0.25)", transition: "opacity 0.15s" },
+  btnSec: { padding: "10px 16px", background: "rgba(0,71,171,0.1)", border: `1px solid ${T.border}`, borderRadius: 8, color: T.accentDim, fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 },
+  btnSm: { padding: "8px 14px", background: "linear-gradient(135deg,#0047AB,#002d7a)", border: "1px solid rgba(0,71,171,0.5)", borderRadius: 8, color: "#fff", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
+  btnSmSec: { padding: "8px 14px", background: "rgba(0,71,171,0.08)", border: `1px solid ${T.border}`, borderRadius: 8, color: T.accentDim, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  iconBtn: { background: "none", border: "none", cursor: "pointer", fontSize: 15, padding: "2px 4px", lineHeight: 1, color: T.text },
+  progressTrack: { background: "rgba(0,71,171,0.1)", borderRadius: 6, height: 4, overflow: "hidden", marginTop: 10 },
+  progressFill: { height: "100%", background: "linear-gradient(90deg,#0047AB,#00d4ff)", transition: "width 0.35s ease", borderRadius: 6 },
+  langGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 6, maxHeight: 280, overflowY: "auto", background: T.langGridBg, padding: 10, borderRadius: 8, marginTop: 10 },
+  langChk: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: T.textDim, cursor: "pointer", padding: "5px 6px", borderRadius: 6, border: "1px solid transparent" },
+  langChkOn: { background: "rgba(0,71,171,0.1)", border: `1px solid ${T.border}`, color: T.text },
+  resultsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 6, maxHeight: 260, overflowY: "auto", background: T.langGridBg, padding: 10, borderRadius: 8 },
+  resultItem: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "7px 10px", borderRadius: 7, border: `1px solid ${T.border}`, overflow: "hidden" },
+}; }
+
+// S is a global reference updated by App via useMemo — components read it at render time
+let S = makeStyles(THEME_DARK);
 
 // Mount directly — no bundler needed
 ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
