@@ -110,7 +110,7 @@ const LANGUAGES = [
 ];
 
 /* ══════════════════════════════════════════════════════════
-   PROVIDER REGISTRY  — 6 providers
+   PROVIDER REGISTRY  — 7 providers
 ══════════════════════════════════════════════════════════ */
 const PROVIDERS = {
   claude: {
@@ -151,22 +151,10 @@ const PROVIDERS = {
     hasBaseUrl: true,
   },
    openrouter: {
-  label: "OpenRouter",
-  sub: "OpenRouter.ai",
-  icon: "🟣",
-  models: [
-    "openai/gpt-4o",
-    "openai/gpt-4.1-mini",
-    "anthropic/claude-sonnet-4",
-    "anthropic/claude-opus-4",
-    "google/gemini-2.5-pro",
-    "google/gemini-2.5-flash",
-    "meta-llama/llama-4-maverick",
-    "mistralai/mistral-large"
-  ],
+  label: "OpenRouter", sub: "OpenRouter.ai", icon: "🟣",
+  models: [ "openai/gpt-4o", "openai/gpt-4.1-mini", "anthropic/claude-sonnet-4","anthropic/claude-opus-4","google/gemini-2.5-pro","google/gemini-2.5-flash","meta-llama/llama-4-maverick","mistralai/mistral-large"],
   defaultModel: "openai/gpt-4.1-mini",
-  keyLabel: "OpenRouter API Key",
-  keyPlaceholder: "sk-or-v1-..."
+  keyLabel: "OpenRouter API Key", keyPlaceholder: "sk-or-v1-...",
  },
 };
 const PIDS = Object.keys(PROVIDERS);
@@ -311,12 +299,9 @@ async function callCopilot({ apiKey, apiBase, modelId, prompt }) {
 }
 
 async function callOpenRouter({ apiKey, modelId, prompt }) {
-  const res = await fetch(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions",{
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+      headers: { "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
         "HTTP-Referer": window.location.origin,
         "X-Title": "LocaleForge"
