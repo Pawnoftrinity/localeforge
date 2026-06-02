@@ -137,6 +137,12 @@ const PROVIDERS = {
     defaultModel: "mistral-small-latest",
     keyLabel: "Mistral API Key", keyPlaceholder: "...",
   },
+  openrouter: {
+  label: "OpenRouter", sub: "OpenRouter.ai", icon: "🟣",
+  models: [ "openai/gpt-4o", "openai/gpt-4.1-mini", "anthropic/claude-sonnet-4","anthropic/claude-opus-4","google/gemini-2.5-pro","google/gemini-2.5-flash","meta-llama/llama-4-maverick","mistralai/mistral-large"],
+  defaultModel: "openai/gpt-4.1-mini",
+  keyLabel: "OpenRouter API Key", keyPlaceholder: "sk-or-v1-...",
+  },
   groq: {
     label: "Groq", sub: "Groq Cloud", icon: "⚡",
     models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768", "gemma2-9b-it"],
@@ -150,12 +156,6 @@ const PROVIDERS = {
     keyLabel: "Azure API Key", keyPlaceholder: "...",
     hasBaseUrl: true,
   },
-   openrouter: {
-  label: "OpenRouter", sub: "OpenRouter.ai", icon: "🟣",
-  models: [ "openai/gpt-4o", "openai/gpt-4.1-mini", "anthropic/claude-sonnet-4","anthropic/claude-opus-4","google/gemini-2.5-pro","google/gemini-2.5-flash","meta-llama/llama-4-maverick","mistralai/mistral-large"],
-  defaultModel: "openai/gpt-4.1-mini",
-  keyLabel: "OpenRouter API Key", keyPlaceholder: "sk-or-v1-...",
- },
 };
 const PIDS = Object.keys(PROVIDERS);
 const CHUNK = 20;
