@@ -395,7 +395,7 @@ async function awDeleteFile(cfg, fileId) {
 /* ══════════════════════════════════════════════════════════
    TRANSLATION ENGINE
 ══════════════════════════════════════════════════════════ */
-const CHUNK = 12; // Reduced from 20 — prevents token truncation on complex scripts
+const CHUNK = 6; // Lowered — smaller batches = less chance of truncation at end
 const RETRY_ATTEMPTS = 3;
 const CHUNK_DELAY_MS = 600;   // Delay between chunks — avoids rate limits
 const LANG_DELAY_MS = 1200;   // Delay between languages in bulk
