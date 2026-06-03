@@ -1,4 +1,4 @@
-const { useState, useEffect, useCallback } = React;
+const { useState, useEffect, useCallback, useRef } = React;
 
 /* ══════════════════════════════════════════════════════════
    LANGUAGES  (100 locales)
@@ -1283,7 +1283,7 @@ function makeStyles(T) { return {
   resultItem: { display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "7px 10px", borderRadius: 7, border: `1px solid ${T.border}`, overflow: "hidden" },
 }; }
 
-// S is a global reference updated by App via useMemo — components read it at render time
+// S is a global updated on every App render — sub-components read it at render time
 let S = makeStyles(THEME_DARK);
 
 // Mount directly — no bundler needed
