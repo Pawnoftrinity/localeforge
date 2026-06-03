@@ -432,35 +432,34 @@ async function translateChunkWithRetry(pairs, langName, langNative, cfg) {
       const raw = await dispatchProvider(cfg, buildPrompt(pairs, langName, langNative));
       const clean = raw.replace(/```json|```/gi, "").trim();
       const s = clean.indexOf("["), e = clean.lastIndexOf("]");
-      if (s < 0 || e <= s) throw new Error("No JSON array found in response.");
+      if (s < 0 || e <= s) throw new Error("No JSON array found in response — model may have returned plain text instead of JSON.");
       const arrStr = clean.slice(s, e + 1);
       const parsed = JSON.parse(arrStr);
       if (!Array.isArray(parsed)) throw new Error("Response is not a JSON array.");
-      // Pad if model returned fewer items than expected
       while (parsed.length < pairs.length) parsed.push(pairs[parsed.length]?.value ?? "");
       return parsed.slice(0, pairs.length);
     } catch (e) {
       lastErr = e;
-      if (attempt < RETRY_ATTEMPTS) {
-        await sleep(attempt * 1500); // Exponential backoff: 1.5s, 3s
-      }
+      if (attempt < RETRY_ATTEMPTS) await sleep(attempt * 1500);
     }
   }
-  // All retries failed — return original English values as fallback
-  console.warn(`Chunk failed after ${RETRY_ATTEMPTS} attempts:`, lastErr?.message);
-  return pairs.map((p) => p.value); // Graceful fallback: keep English
+  // NO FALLBACK — surface the error so the user knows translation failed
+  throw new Error(`Translation failed after ${RETRY_ATTEMPTS} attempts: ${lastErr?.message}`);
 }
 
-async function translateAll(enFlat, keys, langName, langNative, cfg, onProgress) {
+async function translateAll(enFlat, keys, langName, langNative, cfg, onProgress, onChunkDone, cancelRef) {
   const out = [];
   const chunks = Math.ceil(keys.length / CHUNK);
   for (let i = 0; i < keys.length; i += CHUNK) {
+    if (cancelRef && cancelRef.current) throw new Error("CANCELLED");
     const ci = Math.floor(i / CHUNK);
     const slice = keys.slice(i, i + CHUNK).map((k) => ({ key: k, value: enFlat[k] }));
     onProgress(`Chunk ${ci + 1}/${chunks} — ${slice.length} strings`, Math.round(10 + (ci / chunks) * 80));
     const trans = await translateChunkWithRetry(slice, langName, langNative, cfg);
     out.push(...trans);
-    if (i + CHUNK < keys.length) await sleep(CHUNK_DELAY_MS); // Rate limit guard
+    // Fire live preview callback with the translated pairs
+    if (onChunkDone) onChunkDone(slice.map((p, i) => ({ key: p.key, en: p.value, tr: trans[i] })));
+    if (i + CHUNK < keys.length) await sleep(CHUNK_DELAY_MS);
   }
   return out;
 }
@@ -527,16 +526,21 @@ function App() {
   const [enError, setEnError] = useState("");
 
   // Single translate
-  const [subTab, setSubTab] = useState("single");         // single | bulk
+  const [subTab, setSubTab] = useState("single");
   const [targetJson, setTargetJson] = useState("");
   const [targetError, setTargetError] = useState("");
   const [selectedLang, setSelectedLang] = useState("es");
-  const [mode, setMode] = useState("gap");                // gap | full
+  const [mode, setMode] = useState("gap");
   const [singleStatus, setSingleStatus] = useState("idle");
   const [singleProgress, setSingleProgress] = useState({ step: "", pct: 0 });
   const [missingKeys, setMissingKeys] = useState([]);
   const [output, setOutput] = useState("");
   const [copied, setCopied] = useState(false);
+  const [liveRows, setLiveRows] = useState([]);   // Live preview rows [{key,en,tr}]
+
+  // Cancel ref — set .current = true to abort any running translation
+  const cancelRefSingle = useRef(false);
+  const cancelRefBulk = useRef(false);
 
   // Appwrite save feedback
   const [awSaving, setAwSaving] = useState(false);
@@ -552,7 +556,7 @@ function App() {
   const [awFiles, setAwFiles] = useState([]);
   const [awLoading, setAwLoading] = useState(false);
   const [awError, setAwError] = useState("");
-  const [awPreview, setAwPreview] = useState(null);       // { name, content }
+  const [awPreview, setAwPreview] = useState(null);
 
   // ── Derived ──────────────────────────────────────────
   const updateSettings = useCallback((patch) => {
@@ -596,11 +600,17 @@ function App() {
     const keys = mode === "gap" ? Object.keys(enFlat).filter((k) => !(k in tgtFlat)) : Object.keys(enFlat);
     if (keys.length === 0) { setOutput(JSON.stringify(tgt, null, 2)); setSingleStatus("done"); return; }
 
+    cancelRefSingle.current = false;
+    setLiveRows([]);
     setSingleStatus("translating");
     setSingleProgress({ step: `Preparing ${keys.length} keys…`, pct: 5 });
     try {
-      const vals = await translateAll(enFlat, keys, lang.name, lang.native, providerCfg,
-        (step, pct) => setSingleProgress({ step, pct }));
+      const vals = await translateAll(
+        enFlat, keys, lang.name, lang.native, providerCfg,
+        (step, pct) => setSingleProgress({ step, pct }),
+        (rows) => setLiveRows((prev) => [...rows, ...prev].slice(0, 80)), // newest on top, cap at 80
+        cancelRefSingle
+      );
       setSingleProgress({ step: "Building file…", pct: 95 });
       const nested = buildNested(keys, vals);
       const final = mode === "gap" ? deepMerge(tgt, nested) : nested;
@@ -609,8 +619,13 @@ function App() {
       setSingleProgress({ step: "Done!", pct: 100 });
       setAwSaveMsg("");
     } catch (e) {
-      setSingleStatus("error");
-      setSingleProgress({ step: e.message, pct: 0 });
+      if (e.message === "CANCELLED") {
+        setSingleStatus("error");
+        setSingleProgress({ step: "⛔ Stopped by user — no file was saved.", pct: 0 });
+      } else {
+        setSingleStatus("error");
+        setSingleProgress({ step: `⚠ ${e.message}`, pct: 0 });
+      }
     }
   }
 
@@ -633,20 +648,37 @@ function App() {
     const targets = LANGUAGES.filter((l) => bulkSelected.has(l.code));
     if (!targets.length) return;
 
-    setBulkRunning(true); setBulkResults([]);
+    cancelRefBulk.current = false;
+    setBulkRunning(true); setBulkResults([]); setLiveRows([]);
     const results = [];
     for (let i = 0; i < targets.length; i++) {
+      if (cancelRefBulk.current) {
+        setBulkProgress({ step: `⛔ Stopped after ${i} language${i !== 1 ? "s" : ""}. Files ready above.`, pct: Math.round((i / targets.length) * 100) });
+        break;
+      }
       const t = targets[i];
       setBulkProgress({ step: `(${i + 1}/${targets.length}) ${t.native} — ${t.code}.json`, pct: Math.round((i / targets.length) * 100) });
       try {
-        const vals = await translateAll(enFlat, keys, t.name, t.native, providerCfg,
-          (step) => setBulkProgress((p) => ({ ...p, step: `(${i + 1}/${targets.length}) ${t.native} — ${step}` })));
+        const vals = await translateAll(
+          enFlat, keys, t.name, t.native, providerCfg,
+          (step) => setBulkProgress((p) => ({ ...p, step: `(${i + 1}/${targets.length}) ${t.native} — ${step}` })),
+          (rows) => setLiveRows(rows), // Show latest chunk — no accumulation in bulk
+          cancelRefBulk
+        );
         results.push({ code: t.code, native: t.native, json: JSON.stringify(buildNested(keys, vals), null, 2) });
-      } catch (e) { results.push({ code: t.code, native: t.native, json: "", error: e.message }); }
+      } catch (e) {
+        if (e.message === "CANCELLED") {
+          setBulkProgress({ step: `⛔ Stopped during ${t.native}. Files ready above.`, pct: Math.round((i / targets.length) * 100) });
+          setBulkResults([...results]);
+          break;
+        }
+        // Real translation error — mark language as failed with reason, continue to next
+        results.push({ code: t.code, native: t.native, json: "", error: e.message });
+      }
       setBulkResults([...results]);
-      if (i < targets.length - 1) await sleep(LANG_DELAY_MS); // Avoid rate limits between languages
+      if (i < targets.length - 1 && !cancelRefBulk.current) await sleep(LANG_DELAY_MS);
     }
-    setBulkProgress({ step: "All done!", pct: 100 });
+    if (!cancelRefBulk.current) setBulkProgress({ step: "All done!", pct: 100 });
     setBulkRunning(false);
   }
 
@@ -908,22 +940,44 @@ function App() {
                   </Card>
                 )}
 
-                <button onClick={translate}
-                  disabled={!enJson || singleStatus === "translating"}
-                  style={{ ...S.btnPrimary, opacity: !enJson ? 0.45 : 1 }}
-                >
-                  {singleStatus === "translating"
-                    ? `⏳ ${singleProgress.step}`
-                    : mode === "gap"
-                    ? `🌍 Fill Missing → ${lang.native}`
-                    : `🔄 Retranslate → ${lang.native}`}
-                </button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={translate}
+                    disabled={!enJson || singleStatus === "translating"}
+                    style={{ ...S.btnPrimary, flex: 1, opacity: !enJson ? 0.45 : 1 }}
+                  >
+                    {singleStatus === "translating"
+                      ? `⏳ ${singleProgress.step}`
+                      : mode === "gap"
+                      ? `🌍 Fill Missing → ${lang.native}`
+                      : `🔄 Retranslate → ${lang.native}`}
+                  </button>
+                  {singleStatus === "translating" && (
+                    <button onClick={() => { cancelRefSingle.current = true; }}
+                      style={{ padding: "14px 16px", background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: 12, color: "#f87171", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+                    >⛔ Stop</button>
+                  )}
+                </div>
 
                 {singleStatus === "translating" && <ProgressBar pct={singleProgress.pct} />}
 
+                {/* LIVE PREVIEW */}
+                {singleStatus === "translating" && liveRows.length > 0 && (
+                  <Card label={`👁 Live Preview — ${lang.native}`}>
+                    <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+                      {liveRows.map((r, i) => (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, padding: "5px 8px", background: i % 2 === 0 ? "rgba(0,71,171,0.06)" : "transparent", borderRadius: 5 }}>
+                          <div style={{ fontSize: 10, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.en}</div>
+                          <div style={{ fontSize: 10, color: "#4ade80", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.tr}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 9, color: "#475569", marginTop: 6 }}>English → {lang.native} · newest first</div>
+                  </Card>
+                )}
+
                 {singleStatus === "error" && (
                   <div style={{ ...S.infoBox, background: "rgba(239,68,68,0.08)", borderColor: "rgba(239,68,68,0.3)", color: "#f87171", fontSize: 12 }}>
-                    ❌ {singleProgress.step}
+                    {singleProgress.step}
                   </div>
                 )}
 
@@ -982,14 +1036,35 @@ function App() {
                   </div>
                 </Card>
 
-                <button onClick={runBulk}
-                  disabled={!enJson || bulkRunning || bulkSelected.size === 0}
-                  style={{ ...S.btnPrimary, opacity: !enJson || bulkSelected.size === 0 ? 0.45 : 1 }}
-                >
-                  {bulkRunning ? `⏳ ${bulkProgress.step}` : `🚀 Generate ${bulkSelected.size} files`}
-                </button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={runBulk}
+                    disabled={!enJson || bulkRunning || bulkSelected.size === 0}
+                    style={{ ...S.btnPrimary, flex: 1, opacity: !enJson || bulkSelected.size === 0 ? 0.45 : 1 }}
+                  >
+                    {bulkRunning ? `⏳ ${bulkProgress.step}` : `🚀 Generate ${bulkSelected.size} files`}
+                  </button>
+                  {bulkRunning && (
+                    <button onClick={() => { cancelRefBulk.current = true; }}
+                      style={{ padding: "14px 16px", background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: 12, color: "#f87171", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+                    >⛔ Stop</button>
+                  )}
+                </div>
 
                 {bulkRunning && <ProgressBar pct={bulkProgress.pct} />}
+
+                {/* BULK LIVE PREVIEW */}
+                {bulkRunning && liveRows.length > 0 && (
+                  <Card label={`👁 Live Preview — ${bulkProgress.step.split("—")[0].replace("⏳","").trim()}`}>
+                    <div style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+                      {liveRows.map((r, i) => (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, padding: "4px 8px", background: i % 2 === 0 ? "rgba(0,71,171,0.06)" : "transparent", borderRadius: 5 }}>
+                          <div style={{ fontSize: 10, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.en}</div>
+                          <div style={{ fontSize: 10, color: "#4ade80", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.tr}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
 
                 {bulkResults.length > 0 && (
                   <Card label={`Results · ${bulkResults.filter((r) => !r.error).length} / ${bulkResults.length} ready`}>
