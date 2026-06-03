@@ -396,9 +396,9 @@ async function awDeleteFile(cfg, fileId) {
    TRANSLATION ENGINE
 ══════════════════════════════════════════════════════════ */
 const CHUNK = 6; // Lowered — smaller batches = less chance of truncation at end
-const RETRY_ATTEMPTS = 3;
-const CHUNK_DELAY_MS = 600;   // Delay between chunks — avoids rate limits
-const LANG_DELAY_MS = 1200;   // Delay between languages in bulk
+const RETRY_ATTEMPTS = 4;
+const CHUNK_DELAY_MS = 1500;  // Delay between chunks — gives Gemini/free tiers breathing room
+const LANG_DELAY_MS = 4000;   // Delay between languages in bulk — prevents quota exhaustion
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -440,7 +440,7 @@ async function translateChunkWithRetry(pairs, langName, langNative, cfg) {
       return parsed.slice(0, pairs.length);
     } catch (e) {
       lastErr = e;
-      if (attempt < RETRY_ATTEMPTS) await sleep(attempt * 1500);
+      if (attempt < RETRY_ATTEMPTS) await sleep(attempt * 8000); // 8s, 16s, 24s — waits out quota windows
     }
   }
   // NO FALLBACK — surface the error so the user knows translation failed
