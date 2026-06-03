@@ -149,6 +149,12 @@ const PROVIDERS = {
     defaultModel: "llama-3.3-70b-versatile",
     keyLabel: "Groq API Key", keyPlaceholder: "gsk_...",
   },
+  grok: {
+    label: "Grok", sub: "xAI", icon: "𝕏",
+    models: ["grok-3", "grok-3-fast", "grok-3-mini", "grok-3-mini-fast", "grok-2-1212"],
+    defaultModel: "grok-3-fast",
+    keyLabel: "xAI API Key", keyPlaceholder: "xai-...",
+  },
   copilot: {
     label: "Copilot", sub: "Azure OpenAI", icon: "🔷",
     models: ["gpt-4o", "gpt-4o-mini", "gpt-4"],
@@ -284,6 +290,20 @@ async function callGroq({ apiKey, modelId, prompt }) {
   return (await res.json()).choices?.[0]?.message?.content ?? "[]";
 }
 
+async function callGrok({ apiKey, modelId, prompt }) {
+  const res = await fetch("https://api.x.ai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: modelId || "grok-3-fast",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 4096,
+    }),
+  });
+  if (!res.ok) throw new Error(`Grok ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return (await res.json()).choices?.[0]?.message?.content ?? "[]";
+}
+
 async function callCopilot({ apiKey, apiBase, modelId, prompt }) {
   if (!apiBase) throw new Error("Copilot requires a Base URL (Azure OpenAI endpoint).");
   const deployment = modelId || "gpt-4o-mini";
@@ -335,6 +355,7 @@ async function dispatchProvider(cfg, prompt) {
     case "gemini":  return callGemini({ apiKey, modelId, prompt });
     case "mistral": return callMistral({ apiKey, modelId, prompt });
     case "groq":    return callGroq({ apiKey, modelId, prompt });
+    case "grok":    return callGrok({ apiKey, modelId, prompt });
     case "copilot": return callCopilot({ apiKey, apiBase, modelId, prompt });
     case "openrouter": return callOpenRouter({ apiKey, modelId, prompt });
     default: throw new Error("Unknown provider.");
