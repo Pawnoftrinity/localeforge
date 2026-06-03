@@ -416,7 +416,7 @@ async function awDeleteFile(cfg, fileId) {
 /* ══════════════════════════════════════════════════════════
    TRANSLATION ENGINE
 ══════════════════════════════════════════════════════════ */
-const CHUNK = 6; // Lowered — smaller batches = less chance of truncation at end
+let CHUNK = 6; // Overridden at runtime by settings.chunkSize
 const RETRY_ATTEMPTS = 4;
 const CHUNK_DELAY_MS = 1500;  // Delay between chunks — gives Gemini/free tiers breathing room
 const LANG_DELAY_MS = 4000;   // Delay between languages in bulk — prevents quota exhaustion
@@ -493,6 +493,7 @@ const DEFAULT_SETTINGS = {
   providerKeys: Object.fromEntries(PIDS.map((p) => [p, ""])),
   providerModels: Object.fromEntries(PIDS.map((p) => [p, PROVIDERS[p].defaultModel])),
   copilotBase: "",
+  chunkSize: 6,
   appwrite: { endpoint: "https://cloud.appwrite.io/v1", projectId: "", apiKey: "", bucketId: "" },
 };
 
@@ -578,6 +579,15 @@ function App() {
   const [awLoading, setAwLoading] = useState(false);
   const [awError, setAwError] = useState("");
   const [awPreview, setAwPreview] = useState(null);
+
+  // Split tool
+  const [splitNamespaces, setSplitNamespaces] = useState([]); // [{name, flat:{key:val}}]
+  const [splitLangs, setSplitLangs] = useState(new Set(["es", "fr", "de", "ja", "zh-CN", "ar"]));
+  const [splitRunning, setSplitRunning] = useState(false);
+  const [splitProgress, setSplitProgress] = useState({ step: "", pct: 0 });
+  const [splitResults, setSplitResults] = useState([]); // [{lang, namespace, json, error}]
+  const [splitLiveRows, setSplitLiveRows] = useState([]);
+  const cancelRefSplit = useRef(false);
 
   // ── Derived ──────────────────────────────────────────
   const updateSettings = useCallback((patch) => {
@@ -741,8 +751,107 @@ function App() {
     if (mainTab === "appwrite" && awReady && awFiles.length === 0 && !awLoading) loadAwFiles();
   }, [mainTab]);
 
+  // ── Split Tool ───────────────────────────────────────
+  function detectNamespaces(enObj) {
+    const entries = Object.entries(enObj);
+    // If top-level values are objects → already namespaced
+    if (entries.some(([, v]) => typeof v === "object" && v !== null && !Array.isArray(v))) {
+      return entries.map(([name, value]) => ({
+        name: name.toLowerCase().replace(/[^a-z0-9_-]/g, "_"),
+        flat: typeof value === "object" ? flattenKeys(value) : { [name]: String(value) },
+      }));
+    }
+    // Flat JSON → group by key prefix (before first . or _)
+    const groups = {};
+    for (const [k, v] of entries) {
+      const prefix = k.split(/[._]/)[0] || "common";
+      if (!groups[prefix]) groups[prefix] = {};
+      groups[prefix][k] = String(v);
+    }
+    return Object.entries(groups).map(([name, flat]) => ({ name, flat }));
+  }
+
+  function loadSplitFromJson() {
+    const en = parseJSON(enJson, setEnError);
+    if (!en) return;
+    setSplitNamespaces(detectNamespaces(en).map((ns) => ({ ...ns, editing: false })));
+    setSplitResults([]);
+    setSplitLiveRows([]);
+  }
+
+  async function runSplit() {
+    if (!splitNamespaces.length) return;
+    const targets = LANGUAGES.filter((l) => splitLangs.has(l.code));
+    if (!targets.length) return;
+
+    cancelRefSplit.current = false;
+    setSplitRunning(true);
+    setSplitResults([]);
+    setSplitLiveRows([]);
+    const results = [];
+    const total = splitNamespaces.length * targets.length;
+    let done = 0;
+
+    for (const ns of splitNamespaces) {
+      for (const t of targets) {
+        if (cancelRefSplit.current) {
+          setSplitProgress({ step: `⛔ Stopped. ${results.length} files ready.`, pct: Math.round((done / total) * 100) });
+          setSplitResults([...results]);
+          setSplitRunning(false);
+          return;
+        }
+        setSplitProgress({
+          step: `${ns.name} → ${t.native} (${done + 1}/${total})`,
+          pct: Math.round((done / total) * 100),
+        });
+        const keys = Object.keys(ns.flat);
+        try {
+          const vals = await translateAll(
+            ns.flat, keys, t.name, t.native, providerCfg,
+            () => {},
+            (rows) => setSplitLiveRows(rows),
+            cancelRefSplit
+          );
+          // Rebuild nested structure from translated values
+          const translated = buildNested(keys, vals);
+          results.push({ lang: t.code, namespace: ns.name, json: JSON.stringify(translated, null, 2) });
+        } catch (e) {
+          if (e.message === "CANCELLED") {
+            setSplitProgress({ step: `⛔ Stopped. ${results.length} files ready.`, pct: Math.round((done / total) * 100) });
+            setSplitResults([...results]);
+            setSplitRunning(false);
+            return;
+          }
+          results.push({ lang: t.code, namespace: ns.name, json: "", error: e.message });
+        }
+        done++;
+        setSplitResults([...results]);
+        await sleep(LANG_DELAY_MS);
+      }
+    }
+    setSplitProgress({ step: `✅ Done! ${results.filter((r) => !r.error).length}/${total} files generated.`, pct: 100 });
+    setSplitRunning(false);
+  }
+
+  async function downloadSplitZip() {
+    if (!JSZip || !splitResults.length) return;
+    const zip = new JSZip();
+    // Structure: locales/{lang}/{namespace}.json  — matches i18next / BMET Seeker convention
+    splitResults.forEach((r) => {
+      if (r.json) zip.folder("locales").folder(r.lang).file(`${r.namespace}.json`, r.json);
+    });
+    // Also include the original en source files
+    splitNamespaces.forEach((ns) => {
+      // Rebuild nested for en source
+      const enNested = buildNested(Object.keys(ns.flat), Object.values(ns.flat));
+      zip.folder("locales").folder("en").file(`${ns.name}.json`, JSON.stringify(enNested, null, 2));
+    });
+    downloadBlob("locales.zip", await zip.generateAsync({ type: "blob" }), "application/zip");
+  }
+
   const T = darkMode ? THEME_DARK : THEME_LIGHT;
-  S = makeStyles(T); // Update global styles on every render
+  S = makeStyles(T);
+  CHUNK = settings.chunkSize || 6; // Apply user-configured chunk size
 
   /* ── RENDER ─────────────────────────────────────────── */
   return (
@@ -844,6 +953,24 @@ function App() {
                 🔄 Test Connection
               </button>
             )}
+
+            {/* Chunk size */}
+            <div style={{ ...S.drawerSection, marginTop: 20 }}>Translation Chunk Size</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <input type="range" min="2" max="20" step="1"
+                value={settings.chunkSize || 6}
+                onChange={(e) => updateSettings({ chunkSize: Number(e.target.value) })}
+                style={{ flex: 1, accentColor: "#3b82f6" }}
+              />
+              <span style={{ color: "#93c5fd", fontWeight: 700, fontSize: 14, minWidth: 28, textAlign: "center" }}>
+                {settings.chunkSize || 6}
+              </span>
+              <span style={{ fontSize: 10, color: "#475569" }}>keys/chunk</span>
+            </div>
+            <div style={{ fontSize: 10, color: "#475569", marginTop: 4, lineHeight: 1.6 }}>
+              Lower = fewer quota errors but slower. Raise = faster but risks truncation.
+              Recommended: 4–8 for free tiers, 10–15 for paid.
+            </div>
           </div>
         )}
 
@@ -866,7 +993,7 @@ function App() {
 
         {/* ══ MAIN TABS ════════════════════════════════════ */}
         <div style={S.tabBar}>
-          {[["translate", "🔠 Translate"], ["appwrite", "🗄 Appwrite Files"]].map(([id, lbl]) => (
+          {[["translate", "🔠 Translate"], ["split", "✂ Split & Translate"], ["appwrite", "🗄 Appwrite"]].map(([id, lbl]) => (
             <button key={id} onClick={() => setMainTab(id)}
               style={{ ...S.tab, ...(mainTab === id ? S.tabOn : {}) }}
             >
@@ -1122,7 +1249,194 @@ function App() {
         )}
 
         {/* ════════════════════════════════════════════════
-            APPWRITE FILES TAB
+            SPLIT & TRANSLATE TAB
+        ════════════════════════════════════════════════ */}
+        {mainTab === "split" && (
+          <>
+            <div style={{ ...S.infoBox, background: "rgba(0,71,171,0.07)", borderColor: "rgba(0,71,171,0.25)", fontSize: 11, color: "#93c5fd", lineHeight: 1.7 }}>
+              ✂ Splits your <strong>en.json</strong> into namespace files, translates each one, and downloads a
+              <strong> locales/</strong> folder ready to drop into BMET Seeker.
+              Structure: <code style={{ color: "#4ade80" }}>locales/&#123;lang&#125;/&#123;namespace&#125;.json</code>
+            </div>
+
+            {/* Step 1 — Detect namespaces */}
+            <Card label="Step 1 · Detect Namespaces from en.json">
+              {!enJson.trim() ? (
+                <div style={{ fontSize: 11, color: "#475569" }}>← Paste your en.json in the Source File box above first.</div>
+              ) : (
+                <button onClick={loadSplitFromJson} style={{ ...S.btnSm, width: "100%" }}>
+                  🔍 Auto-detect Namespaces
+                </button>
+              )}
+            </Card>
+
+            {/* Namespace list */}
+            {splitNamespaces.length > 0 && (
+              <Card label={`Namespaces Detected · ${splitNamespaces.length} files`}>
+                <div style={{ fontSize: 10, color: "#475569", marginBottom: 10 }}>
+                  Rename any namespace below. Names become the filename: <span style={{ color: "#4ade80" }}>&#123;name&#125;.json</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {splitNamespaces.map((ns, i) => (
+                    <div key={i} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      background: "rgba(0,71,171,0.07)", border: "1px solid rgba(0,71,171,0.2)",
+                      borderRadius: 8, padding: "8px 10px",
+                    }}>
+                      <span style={{ fontSize: 13 }}>📄</span>
+                      <input
+                        value={ns.name}
+                        onChange={(e) => {
+                          const safe = e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+                          setSplitNamespaces((prev) => prev.map((n, idx) => idx === i ? { ...n, name: safe } : n));
+                        }}
+                        style={{ ...S.input, flex: 1, padding: "5px 8px", fontSize: 11 }}
+                      />
+                      <span style={{ fontSize: 10, color: "#475569", whiteSpace: "nowrap" }}>
+                        {Object.keys(ns.flat).length} keys
+                      </span>
+                      <button
+                        onClick={() => setSplitNamespaces((prev) => prev.filter((_, idx) => idx !== i))}
+                        style={{ ...S.iconBtn, color: "#f87171", fontSize: 13 }}
+                        title="Remove namespace"
+                      >✕</button>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {/* Step 2 — Select languages */}
+            {splitNamespaces.length > 0 && (
+              <Card label={`Step 2 · Select Languages · ${splitLangs.size} / ${LANGUAGES.length}`}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+                  <button onClick={() => setSplitLangs(new Set(LANGUAGES.map((l) => l.code)))} style={S.btnSmSec}>All</button>
+                  <button onClick={() => setSplitLangs(new Set())} style={S.btnSmSec}>None</button>
+                  {[["🌎 Americas", ["es","pt","fr","ht"]], ["🌍 Europe", ["de","it","nl","pl","sv","no","da","fi","cs","ro","hu","el","uk","ru"]], ["🌏 Asia", ["ja","zh-CN","zh-TW","ko","hi","ar","vi","th","id","ms"]]].map(([label, codes]) => (
+                    <button key={label} onClick={() => setSplitLangs(new Set(codes))} style={S.btnSmSec}>{label}</button>
+                  ))}
+                </div>
+                <div style={S.langGrid}>
+                  {LANGUAGES.map((l) => {
+                    const sel = splitLangs.has(l.code);
+                    return (
+                      <label key={l.code} style={{ ...S.langChk, ...(sel ? S.langChkOn : {}) }}>
+                        <input type="checkbox" checked={sel}
+                          onChange={(e) => {
+                            const next = new Set(splitLangs);
+                            e.target.checked ? next.add(l.code) : next.delete(l.code);
+                            setSplitLangs(next);
+                          }}
+                          style={{ accentColor: "#3b82f6", width: 13, height: 13 }}
+                        />
+                        <span style={{ fontWeight: 700, color: sel ? "#93c5fd" : "#475569", fontSize: 11 }}>{l.code}</span>
+                        <span style={{ fontSize: 10, opacity: 0.65, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.native}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 10, color: "#475569" }}>
+                  Will generate <strong style={{ color: "#93c5fd" }}>{splitNamespaces.length * splitLangs.size}</strong> files
+                  ({splitNamespaces.length} namespace{splitNamespaces.length !== 1 ? "s" : ""} × {splitLangs.size} language{splitLangs.size !== 1 ? "s" : ""})
+                  + en/ source files
+                </div>
+              </Card>
+            )}
+
+            {/* Step 3 — Run */}
+            {splitNamespaces.length > 0 && splitLangs.size > 0 && (
+              <>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button onClick={runSplit} disabled={splitRunning}
+                    style={{ ...S.btnPrimary, flex: 1 }}
+                  >
+                    {splitRunning ? `⏳ ${splitProgress.step}` : `🚀 Translate ${splitNamespaces.length * splitLangs.size} files`}
+                  </button>
+                  {splitRunning && (
+                    <button onClick={() => { cancelRefSplit.current = true; }}
+                      style={{ padding: "14px 16px", background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: 12, color: "#f87171", fontSize: 13, fontWeight: 800, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}
+                    >⛔ Stop</button>
+                  )}
+                </div>
+
+                {splitRunning && <ProgressBar pct={splitProgress.pct} />}
+
+                {/* Live preview */}
+                {splitRunning && splitLiveRows.length > 0 && (
+                  <Card label="👁 Live Preview">
+                    <div style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+                      {splitLiveRows.map((r, i) => (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, padding: "4px 8px", background: i % 2 === 0 ? "rgba(0,71,171,0.06)" : "transparent", borderRadius: 5 }}>
+                          <div style={{ fontSize: 10, color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.en}</div>
+                          <div style={{ fontSize: 10, color: "#4ade80", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.tr}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </>
+            )}
+
+            {/* Results */}
+            {splitResults.length > 0 && (
+              <Card label={`Results · ${splitResults.filter((r) => !r.error).length} / ${splitResults.length} ready`}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                  <button onClick={downloadSplitZip} disabled={!JSZip} style={S.btnSm}>
+                    ⬇ Download locales.zip
+                  </button>
+                  <span style={{ fontSize: 10, color: "#475569", alignSelf: "center" }}>
+                    Structure: locales/&#123;lang&#125;/&#123;namespace&#125;.json + locales/en/
+                  </span>
+                </div>
+
+                {/* Group results by language */}
+                {LANGUAGES.filter((l) => splitLangs.has(l.code) && splitResults.some((r) => r.lang === l.code)).map((l) => {
+                  const langFiles = splitResults.filter((r) => r.lang === l.code);
+                  const allOk = langFiles.every((r) => !r.error);
+                  return (
+                    <div key={l.code} style={{
+                      marginBottom: 8, background: "rgba(0,71,171,0.05)",
+                      border: `1px solid ${allOk ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+                      borderRadius: 10, padding: "8px 10px",
+                    }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontWeight: 700, color: "#93c5fd", fontSize: 12 }}>{l.code}</span>
+                        <span style={{ fontSize: 11, color: "#64748b" }}>{l.native}</span>
+                        <span style={{ marginLeft: "auto", fontSize: 10, color: allOk ? "#22c55e" : "#f87171" }}>
+                          {langFiles.filter((r) => !r.error).length}/{langFiles.length} files
+                        </span>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {langFiles.map((r) => (
+                          <div key={r.namespace} style={{
+                            display: "flex", alignItems: "center", gap: 4,
+                            padding: "3px 8px", borderRadius: 5,
+                            background: r.error ? "rgba(239,68,68,0.1)" : "rgba(34,197,94,0.08)",
+                            border: `1px solid ${r.error ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.2)"}`,
+                          }}>
+                            <span style={{ fontSize: 10, color: r.error ? "#f87171" : "#4ade80" }}>
+                              {r.namespace}.json
+                            </span>
+                            {r.json && (
+                              <button
+                                onClick={() => downloadBlob(`${r.namespace}.json`, r.json)}
+                                style={{ background: "none", border: "none", color: "#60a5fa", cursor: "pointer", fontSize: 11, padding: 0, lineHeight: 1 }}
+                                title={`Download ${l.code}/${r.namespace}.json`}
+                              >⬇</button>
+                            )}
+                            {r.error && <span title={r.error} style={{ color: "#f87171", fontSize: 11, cursor: "help" }}>⚠</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </Card>
+            )}
+          </>
+        )}
+
+        {/* ════════════════════════════════════════════════
         ════════════════════════════════════════════════ */}
         {mainTab === "appwrite" && (
           <>
