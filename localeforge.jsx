@@ -589,6 +589,62 @@ function App() {
   const [splitLiveRows, setSplitLiveRows] = useState([]);
   const cancelRefSplit = useRef(false);
 
+  // Error log
+  const [errorLog, setErrorLog] = useState([]);
+  const [errorLogOpen, setErrorLogOpen] = useState(false);
+  const addError = useCallback((context, msg) => {
+    setErrorLog((prev) => [{ id: Date.now(), time: new Date().toLocaleTimeString(), context, msg }, ...prev].slice(0, 200));
+    setErrorLogOpen(true);
+  }, []);
+
+  // Sessions
+  const SESSIONS_KEY = "localeforge_sessions";
+  const [sessions, setSessions] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || "[]"); } catch { return []; }
+  });
+  const [sessionName, setSessionName] = useState("");
+  const [sessionMsg, setSessionMsg] = useState("");
+
+  function persistSessions(list) {
+    setSessions(list);
+    try { localStorage.setItem(SESSIONS_KEY, JSON.stringify(list)); } catch {}
+  }
+
+  function saveSession(type, results) {
+    const name = sessionName.trim() || `Session ${new Date().toLocaleString()}`;
+    const session = {
+      id: Date.now().toString(),
+      name,
+      timestamp: Date.now(),
+      type,
+      provider: pid,
+      model: providerCfg.modelId,
+      enJson,
+      results,
+      errorCount: errorLog.length,
+    };
+    persistSessions([session, ...sessions].slice(0, 20)); // Keep last 20
+    setSessionMsg(`✅ Saved: "${name}"`);
+    setSessionName("");
+    setTimeout(() => setSessionMsg(""), 3000);
+  }
+
+  function deleteSession(id) {
+    persistSessions(sessions.filter((s) => s.id !== id));
+  }
+
+  function loadSession(session) {
+    setEnJson(session.enJson || "");
+    if (session.type === "bulk") { setBulkResults(session.results || []); setSubTab("bulk"); setMainTab("translate"); }
+    if (session.type === "split") { setSplitResults(session.results || []); setMainTab("split"); }
+    setSessionMsg(`✅ Loaded: "${session.name}"`);
+    setTimeout(() => setSessionMsg(""), 3000);
+  }
+
+  function exportSession(session) {
+    downloadBlob(`${session.name.replace(/[^a-z0-9]/gi,"_")}.json`, JSON.stringify(session, null, 2));
+  }
+
   // ── Derived ──────────────────────────────────────────
   const updateSettings = useCallback((patch) => {
     setSettings((prev) => { const next = { ...prev, ...patch }; saveSettings(next); return next; });
@@ -654,6 +710,7 @@ function App() {
         setSingleStatus("error");
         setSingleProgress({ step: "⛔ Stopped by user — no file was saved.", pct: 0 });
       } else {
+        addError(`Single → ${lang.native}`, e.message);
         setSingleStatus("error");
         setSingleProgress({ step: `⚠ ${e.message}`, pct: 0 });
       }
@@ -703,13 +760,16 @@ function App() {
           setBulkResults([...results]);
           break;
         }
-        // Real translation error — mark language as failed with reason, continue to next
+        addError(`Bulk → ${t.native} (${t.code})`, e.message);
         results.push({ code: t.code, native: t.native, json: "", error: e.message });
       }
       setBulkResults([...results]);
       if (i < targets.length - 1 && !cancelRefBulk.current) await sleep(LANG_DELAY_MS);
     }
-    if (!cancelRefBulk.current) setBulkProgress({ step: "All done!", pct: 100 });
+    if (!cancelRefBulk.current) {
+      setBulkProgress({ step: "All done!", pct: 100 });
+      saveSession("bulk", results); // Auto-save session on completion
+    }
     setBulkRunning(false);
   }
 
@@ -976,6 +1036,16 @@ function App() {
 
         {/* ══ SOURCE JSON ══════════════════════════════════ */}
         <Card label="en.json · Source File" error={!!enError}>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+            <button onClick={() => navigator.clipboard.readText().then((t) => { setEnJson(t); setEnError(""); }).catch(() => {})}
+              style={S.btnSmSec}>📋 Paste</button>
+            <button onClick={() => navigator.clipboard.writeText(enJson)}
+              style={S.btnSmSec} disabled={!enJson}>📄 Copy</button>
+            <button onClick={() => downloadBlob("en.json", enJson)}
+              style={S.btnSmSec} disabled={!enJson}>⬇ Save</button>
+            <button onClick={() => { setEnJson(""); setEnError(""); setSingleStatus("idle"); setSplitNamespaces([]); }}
+              style={{ ...S.btnSmSec, color: "#f87171", borderColor: "rgba(239,68,68,0.3)" }} disabled={!enJson}>✕ Clear</button>
+          </div>
           <textarea value={enJson}
             onChange={(e) => { setEnJson(e.target.value); setEnError(""); setSingleStatus("idle"); }}
             placeholder="Paste your en.json content here…"
@@ -993,12 +1063,18 @@ function App() {
 
         {/* ══ MAIN TABS ════════════════════════════════════ */}
         <div style={S.tabBar}>
-          {[["translate", "🔠 Translate"], ["split", "✂ Split & Translate"], ["appwrite", "🗄 Appwrite"]].map(([id, lbl]) => (
+          {[
+            ["translate", "🔠 Translate"],
+            ["split", "✂ Split"],
+            ["sessions", "💾 Sessions"],
+            ["appwrite", "🗄 Appwrite"],
+          ].map(([id, lbl]) => (
             <button key={id} onClick={() => setMainTab(id)}
               style={{ ...S.tab, ...(mainTab === id ? S.tabOn : {}) }}
             >
               {lbl}
-              {id === "appwrite" && awReady && <span style={{ color: "#22c55e", marginLeft: 5, fontSize: 9 }}>●</span>}
+              {id === "appwrite" && awReady && <span style={{ color: "#22c55e", marginLeft: 4, fontSize: 9 }}>●</span>}
+              {id === "sessions" && sessions.length > 0 && <span style={{ color: "#93c5fd", marginLeft: 4, fontSize: 9 }}>{sessions.length}</span>}
             </button>
           ))}
         </div>
@@ -1514,7 +1590,128 @@ function App() {
           </>
         )}
 
+        {/* ════════════════════════════════════════════════
+            SESSIONS TAB
+        ════════════════════════════════════════════════ */}
+        {mainTab === "sessions" && (
+          <>
+            {/* Save current session */}
+            <Card label="💾 Save Current Session">
+              <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8, lineHeight: 1.6 }}>
+                Sessions save your en.json, results, provider used, and errors so you can resume or compare runs later.
+                Sessions are also auto-saved when a bulk or split run completes.
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input style={{ ...S.input, flex: 1 }}
+                  placeholder="Session name (e.g. BMET v2 - Gemini run)"
+                  value={sessionName}
+                  onChange={(e) => setSessionName(e.target.value)}
+                />
+                <button onClick={() => saveSession(subTab === "bulk" ? "bulk" : "single", bulkResults)}
+                  style={S.btnSm} disabled={!enJson}>
+                  💾 Save
+                </button>
+              </div>
+              {sessionMsg && (
+                <div style={{ fontSize: 11, color: "#22c55e", marginTop: 8 }}>{sessionMsg}</div>
+              )}
+            </Card>
+
+            {/* Saved sessions list */}
+            {sessions.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#475569", fontSize: 12, padding: "28px 0" }}>
+                No sessions saved yet. Run a translation and it will auto-save here.
+              </div>
+            ) : (
+              <Card label={`Saved Sessions · ${sessions.length}`}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {sessions.map((s) => (
+                    <div key={s.id} style={{
+                      background: "rgba(0,71,171,0.06)", border: "1px solid rgba(0,71,171,0.2)",
+                      borderRadius: 10, padding: "10px 12px",
+                    }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 700, fontSize: 12, color: "#e2e8f0" }}>{s.name}</div>
+                          <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>
+                            {new Date(s.timestamp).toLocaleString()} · {s.provider} · {s.model}
+                          </div>
+                          <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>
+                            Type: <span style={{ color: "#93c5fd" }}>{s.type}</span>
+                            {s.results?.length > 0 && <> · <span style={{ color: "#4ade80" }}>{s.results.filter((r) => !r.error).length} files OK</span></>}
+                            {s.errorCount > 0 && <> · <span style={{ color: "#f87171" }}>{s.errorCount} errors</span></>}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button onClick={() => loadSession(s)} style={S.btnSmSec}>📂 Load</button>
+                        <button onClick={() => exportSession(s)} style={S.btnSmSec}>⬇ Export JSON</button>
+                        <button onClick={() => deleteSession(s.id)}
+                          style={{ ...S.btnSmSec, color: "#f87171", borderColor: "rgba(239,68,68,0.3)" }}>
+                          🗑 Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => { if (confirm("Delete all sessions?")) persistSessions([]); }}
+                  style={{ ...S.btnSmSec, marginTop: 10, color: "#f87171", borderColor: "rgba(239,68,68,0.3)", width: "100%" }}>
+                  🗑 Clear All Sessions
+                </button>
+              </Card>
+            )}
+          </>
+        )}
+
         <div style={{ height: 40 }} />
+
+        {/* ══ ERROR LOG ════════════════════════════════════ */}
+        {errorLog.length > 0 && (
+          <div style={{ maxWidth: 720, margin: "0 auto", padding: "0 12px 24px", position: "relative", zIndex: 1 }}>
+            <button
+              onClick={() => setErrorLogOpen((o) => !o)}
+              style={{
+                width: "100%", padding: "10px 14px", background: "rgba(239,68,68,0.08)",
+                border: "1px solid rgba(239,68,68,0.3)", borderRadius: errorLogOpen ? "10px 10px 0 0" : 10,
+                color: "#f87171", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                fontFamily: "inherit", display: "flex", alignItems: "center", gap: 8, textAlign: "left",
+              }}
+            >
+              ⚠ Error Log
+              <span style={{ background: "rgba(239,68,68,0.2)", borderRadius: 10, padding: "1px 7px", fontSize: 10 }}>
+                {errorLog.length}
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 10 }}>{errorLogOpen ? "▲ Hide" : "▼ Show"}</span>
+            </button>
+            {errorLogOpen && (
+              <div style={{
+                background: "rgba(20,0,0,0.85)", border: "1px solid rgba(239,68,68,0.3)",
+                borderTop: "none", borderRadius: "0 0 10px 10px", padding: 10,
+                maxHeight: 260, overflowY: "auto",
+              }}>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+                  <button onClick={() => { setErrorLog([]); setErrorLogOpen(false); }}
+                    style={{ ...S.btnSmSec, fontSize: 10, color: "#f87171", borderColor: "rgba(239,68,68,0.3)" }}>
+                    Clear Log
+                  </button>
+                </div>
+                {errorLog.map((e) => (
+                  <div key={e.id} style={{
+                    marginBottom: 8, padding: "6px 8px",
+                    background: "rgba(239,68,68,0.07)", borderRadius: 6,
+                    border: "1px solid rgba(239,68,68,0.15)",
+                  }}>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 3 }}>
+                      <span style={{ fontSize: 10, color: "#f87171", fontWeight: 700 }}>{e.time}</span>
+                      <span style={{ fontSize: 10, color: "#fbbf24" }}>{e.context}</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#fca5a5", lineHeight: 1.5, wordBreak: "break-word" }}>{e.msg}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </main>
     </div>
   );
