@@ -167,6 +167,22 @@ const PIDS = Object.keys(PROVIDERS);
 const STORAGE_KEY = "localeforge_v3";
 
 /* ══════════════════════════════════════════════════════════
+   DEFAULT RATE LIMITS  (free tier defaults — all editable)
+   rpm = requests per minute | rpd = requests per day
+   0 = unlimited / unknown
+══════════════════════════════════════════════════════════ */
+const DEFAULT_RATE_LIMITS = {
+  claude:     { rpm: 50,   rpd: 0,     tier: "Anthropic Tier 1" },
+  openai:     { rpm: 500,  rpd: 0,     tier: "OpenAI Tier 1" },
+  gemini:     { rpm: 15,   rpd: 1500,  tier: "Google Free" },
+  mistral:    { rpm: 1,    rpd: 0,     tier: "Mistral Free" },
+  openrouter: { rpm: 20,   rpd: 200,   tier: "OpenRouter Free" },
+  groq:       { rpm: 30,   rpd: 14400, tier: "Groq Free" },
+  grok:       { rpm: 60,   rpd: 0,     tier: "xAI Basic" },
+  copilot:    { rpm: 60,   rpd: 0,     tier: "Azure Paid" },
+};
+
+/* ══════════════════════════════════════════════════════════
    JSON HELPERS
 ══════════════════════════════════════════════════════════ */
 function flattenKeys(obj, prefix = "") {
@@ -446,11 +462,12 @@ Return format (${pairs.length} items):
 ["translation1", "translation2", ...]`;
 }
 
-async function translateChunkWithRetry(pairs, langName, langNative, cfg) {
+async function translateChunkWithRetry(pairs, langName, langNative, cfg, dispatchFn) {
+  const dispatch = dispatchFn || ((c, p) => dispatchProvider(c, p));
   let lastErr;
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
     try {
-      const raw = await dispatchProvider(cfg, buildPrompt(pairs, langName, langNative));
+      const raw = await dispatch(cfg, buildPrompt(pairs, langName, langNative));
       const clean = raw.replace(/```json|```/gi, "").trim();
       const s = clean.indexOf("["), e = clean.lastIndexOf("]");
       if (s < 0 || e <= s) throw new Error("No JSON array found in response — model may have returned plain text instead of JSON.");
@@ -461,14 +478,15 @@ async function translateChunkWithRetry(pairs, langName, langNative, cfg) {
       return parsed.slice(0, pairs.length);
     } catch (e) {
       lastErr = e;
-      if (attempt < RETRY_ATTEMPTS) await sleep(attempt * 8000); // 8s, 16s, 24s — waits out quota windows
+      // If this is a failover signal, propagate immediately — don't retry with same provider
+      if (e.__failover) throw e;
+      if (attempt < RETRY_ATTEMPTS) await sleep(attempt * 8000);
     }
   }
-  // NO FALLBACK — surface the error so the user knows translation failed
   throw new Error(`Translation failed after ${RETRY_ATTEMPTS} attempts: ${lastErr?.message}`);
 }
 
-async function translateAll(enFlat, keys, langName, langNative, cfg, onProgress, onChunkDone, cancelRef) {
+async function translateAll(enFlat, keys, langName, langNative, cfg, onProgress, onChunkDone, cancelRef, dispatchFn) {
   const out = [];
   const chunks = Math.ceil(keys.length / CHUNK);
   for (let i = 0; i < keys.length; i += CHUNK) {
@@ -476,7 +494,7 @@ async function translateAll(enFlat, keys, langName, langNative, cfg, onProgress,
     const ci = Math.floor(i / CHUNK);
     const slice = keys.slice(i, i + CHUNK).map((k) => ({ key: k, value: enFlat[k] }));
     onProgress(`Chunk ${ci + 1}/${chunks} — ${slice.length} strings`, Math.round(10 + (ci / chunks) * 80));
-    const trans = await translateChunkWithRetry(slice, langName, langNative, cfg);
+    const trans = await translateChunkWithRetry(slice, langName, langNative, cfg, dispatchFn);
     out.push(...trans);
     // Fire live preview callback with the translated pairs
     if (onChunkDone) onChunkDone(slice.map((p, i) => ({ key: p.key, en: p.value, tr: trans[i] })));
@@ -494,6 +512,9 @@ const DEFAULT_SETTINGS = {
   providerModels: Object.fromEntries(PIDS.map((p) => [p, PROVIDERS[p].defaultModel])),
   copilotBase: "",
   chunkSize: 6,
+  autoFailover: true,
+  failoverOrder: [...PIDS],
+  rateLimits: { ...DEFAULT_RATE_LIMITS },
   appwrite: { endpoint: "https://cloud.appwrite.io/v1", projectId: "", apiKey: "", bucketId: "" },
 };
 
@@ -508,6 +529,8 @@ function loadSettings() {
       providerKeys: { ...DEFAULT_SETTINGS.providerKeys, ...parsed.providerKeys },
       providerModels: { ...DEFAULT_SETTINGS.providerModels, ...parsed.providerModels },
       appwrite: { ...DEFAULT_SETTINGS.appwrite, ...parsed.appwrite },
+      rateLimits: { ...DEFAULT_RATE_LIMITS, ...parsed.rateLimits },
+      failoverOrder: parsed.failoverOrder?.length ? parsed.failoverOrder : [...PIDS],
     };
   } catch { return DEFAULT_SETTINGS; }
 }
@@ -596,6 +619,135 @@ function App() {
     setErrorLog((prev) => [{ id: Date.now(), time: new Date().toLocaleTimeString(), context, msg }, ...prev].slice(0, 200));
     setErrorLogOpen(true);
   }, []);
+
+  // Provider status — tracks live request counts + exhaustion
+  const initStatus = () => Object.fromEntries(PIDS.map((p) => [p, {
+    rpm_used: 0, rpd_used: 0,
+    minuteStart: Date.now(), dayStart: startOfToday(),
+    exhausted: false, exhaustedAt: null, switchedTo: null,
+  }]));
+  const [providerStatus, setProviderStatus] = useState(initStatus);
+  const providerStatusRef = useRef(providerStatus);
+  useEffect(() => { providerStatusRef.current = providerStatus; }, [providerStatus]);
+
+  // Reset per-minute counters every 60s, auto-recover exhausted providers after 90s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setProviderStatus((prev) => {
+        const next = { ...prev };
+        for (const p of PIDS) {
+          const s = next[p];
+          if (now - s.minuteStart >= 60000) {
+            next[p] = { ...s, rpm_used: 0, minuteStart: now };
+          }
+          // Auto-recover after 90s cooldown
+          if (s.exhausted && s.exhaustedAt && now - s.exhaustedAt > 90000) {
+            next[p] = { ...s, exhausted: false, exhaustedAt: null };
+          }
+        }
+        return next;
+      });
+    }, 5000); // Check every 5s
+    return () => clearInterval(interval);
+  }, []);
+
+  function startOfToday() {
+    const d = new Date(); d.setHours(0,0,0,0); return d.getTime();
+  }
+
+  function markExhausted(pid, reason) {
+    setProviderStatus((prev) => ({
+      ...prev,
+      [pid]: { ...prev[pid], exhausted: true, exhaustedAt: Date.now() },
+    }));
+  }
+
+  function trackRequest(pid) {
+    setProviderStatus((prev) => ({
+      ...prev,
+      [pid]: { ...prev[pid], rpm_used: (prev[pid].rpm_used || 0) + 1, rpd_used: (prev[pid].rpd_used || 0) + 1 },
+    }));
+  }
+
+  function resetProviderCounts(pid) {
+    setProviderStatus((prev) => ({
+      ...prev,
+      [pid]: { ...prev[pid], rpm_used: 0, rpd_used: 0, exhausted: false, exhaustedAt: null },
+    }));
+  }
+
+  function isProviderNearLimit(pid) {
+    const status = providerStatusRef.current[pid];
+    const limits = settings.rateLimits?.[pid] || DEFAULT_RATE_LIMITS[pid] || {};
+    const rpmNear = limits.rpm > 0 && status.rpm_used >= limits.rpm * 0.8;
+    const rpdNear = limits.rpd > 0 && status.rpd_used >= limits.rpd * 0.9;
+    return rpmNear || rpdNear;
+  }
+
+  function getProviderHealth(pid) {
+    const status = providerStatusRef.current?.[pid];
+    if (!status) return "ok";
+    if (status.exhausted) return "exhausted";
+    if (isProviderNearLimit(pid)) return "near";
+    return "ok";
+  }
+
+  // Smart dispatch — auto-failover on 429, tracks usage
+  const activeProviderRef = useRef(settings.activeProvider);
+  useEffect(() => { activeProviderRef.current = settings.activeProvider; }, [settings.activeProvider]);
+
+  function buildCfgFor(pid) {
+    return {
+      provider: pid,
+      apiKey: settings.providerKeys[pid] || "",
+      apiBase: settings.copilotBase || "",
+      modelId: settings.providerModels[pid] || PROVIDERS[pid]?.defaultModel || "",
+    };
+  }
+
+  function getNextProvider(excluding = []) {
+    const order = settings.failoverOrder?.length ? settings.failoverOrder : PIDS;
+    return order.find((p) =>
+      !excluding.includes(p) &&
+      settings.providerKeys[p] &&
+      !(providerStatusRef.current[p]?.exhausted)
+    ) || null;
+  }
+
+  const smartDispatch = useCallback(async (cfg, prompt) => {
+    const tried = [];
+    let currentPid = activeProviderRef.current;
+
+    while (true) {
+      tried.push(currentPid);
+      trackRequest(currentPid);
+      const currentCfg = buildCfgFor(currentPid);
+      try {
+        const result = await dispatchProvider(currentCfg, prompt);
+        return result;
+      } catch (e) {
+        const is429 = e.message.includes("429") || e.message.includes("quota") || e.message.includes("rate limit");
+        if (is429 && settings.autoFailover) {
+          markExhausted(currentPid, e.message);
+          addError(`🔴 ${PROVIDERS[currentPid]?.label} Exhausted`, `Rate limit hit. ${e.message.slice(0, 120)}`);
+          const next = getNextProvider(tried);
+          if (next) {
+            addError(`⚡ Auto-failover`, `Switched from ${PROVIDERS[currentPid]?.label} → ${PROVIDERS[next]?.label}`);
+            currentPid = next;
+            activeProviderRef.current = next;
+            // Update active provider in UI
+            updateSettings({ activeProvider: next });
+            await sleep(2000); // Brief pause before retrying with new provider
+            continue;
+          } else {
+            throw new Error(`All providers exhausted. Original error: ${e.message}`);
+          }
+        }
+        throw e;
+      }
+    }
+  }, [settings, addError]);
 
   // Sessions
   const SESSIONS_KEY = "localeforge_sessions";
@@ -695,8 +847,9 @@ function App() {
       const vals = await translateAll(
         enFlat, keys, lang.name, lang.native, providerCfg,
         (step, pct) => setSingleProgress({ step, pct }),
-        (rows) => setLiveRows((prev) => [...rows, ...prev].slice(0, 80)), // newest on top, cap at 80
-        cancelRefSingle
+        (rows) => setLiveRows((prev) => [...rows, ...prev].slice(0, 80)),
+        cancelRefSingle,
+        smartDispatch
       );
       setSingleProgress({ step: "Building file…", pct: 95 });
       const nested = buildNested(keys, vals);
@@ -750,8 +903,9 @@ function App() {
         const vals = await translateAll(
           enFlat, keys, t.name, t.native, providerCfg,
           (step) => setBulkProgress((p) => ({ ...p, step: `(${i + 1}/${targets.length}) ${t.native} — ${step}` })),
-          (rows) => setLiveRows(rows), // Show latest chunk — no accumulation in bulk
-          cancelRefBulk
+          (rows) => setLiveRows(rows),
+          cancelRefBulk,
+          smartDispatch
         );
         results.push({ code: t.code, native: t.native, json: JSON.stringify(buildNested(keys, vals), null, 2) });
       } catch (e) {
@@ -870,7 +1024,8 @@ function App() {
             ns.flat, keys, t.name, t.native, providerCfg,
             () => {},
             (rows) => setSplitLiveRows(rows),
-            cancelRefSplit
+            cancelRefSplit,
+            smartDispatch
           );
           // Rebuild nested structure from translated values
           const translated = buildNested(keys, vals);
@@ -1014,6 +1169,136 @@ function App() {
               </button>
             )}
 
+            {/* ── FAILOVER & RATE LIMITS ── */}
+            <div style={{ ...S.drawerSection, marginTop: 20 }}>
+              ⚡ Auto-Failover & Rate Limits
+            </div>
+
+            {/* Auto-failover toggle */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", flex: 1 }}>
+                <div
+                  onClick={() => updateSettings({ autoFailover: !settings.autoFailover })}
+                  style={{
+                    width: 40, height: 22, borderRadius: 11, cursor: "pointer", transition: "background 0.2s",
+                    background: settings.autoFailover ? "#0047AB" : "rgba(255,255,255,0.1)",
+                    position: "relative", flexShrink: 0,
+                  }}
+                >
+                  <div style={{
+                    position: "absolute", top: 3, width: 16, height: 16, borderRadius: "50%",
+                    background: "#fff", transition: "left 0.2s",
+                    left: settings.autoFailover ? 21 : 3,
+                  }} />
+                </div>
+                <span style={{ fontSize: 11, color: settings.autoFailover ? "#93c5fd" : "#475569" }}>
+                  Auto-switch provider when rate limited
+                </span>
+              </label>
+            </div>
+
+            {/* Failover order */}
+            <div style={{ fontSize: 10, color: "#475569", marginBottom: 6 }}>
+              Failover order — drag to reorder (top = highest priority):
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
+              {(settings.failoverOrder || PIDS).map((p, i) => {
+                const health = getProviderHealth(p);
+                const healthColor = health === "exhausted" ? "#f87171" : health === "near" ? "#f59e0b" : "#22c55e";
+                const status = providerStatus[p];
+                const limits = settings.rateLimits?.[p] || DEFAULT_RATE_LIMITS[p] || {};
+                const hasKey = !!settings.providerKeys[p];
+                return (
+                  <div key={p} style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    background: "rgba(0,71,171,0.08)", border: `1px solid ${health === "exhausted" ? "rgba(239,68,68,0.3)" : "rgba(0,71,171,0.2)"}`,
+                    borderRadius: 7, padding: "6px 8px",
+                  }}>
+                    <span style={{ fontSize: 9, color: healthColor }}>●</span>
+                    <span style={{ fontSize: 11, color: hasKey ? "#e2e8f0" : "#475569", flex: 1, fontWeight: 600 }}>
+                      {PROVIDERS[p]?.icon} {PROVIDERS[p]?.label}
+                    </span>
+                    {status && (
+                      <span style={{ fontSize: 9, color: "#475569" }}>
+                        {status.rpm_used}/{limits.rpm || "∞"} rpm
+                        {limits.rpd > 0 && ` · ${status.rpd_used}/${limits.rpd} rpd`}
+                      </span>
+                    )}
+                    {status?.exhausted && (
+                      <span style={{ fontSize: 9, color: "#f87171", fontWeight: 700 }}>EXHAUSTED</span>
+                    )}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                      <button
+                        disabled={i === 0}
+                        onClick={() => {
+                          const order = [...(settings.failoverOrder || PIDS)];
+                          [order[i - 1], order[i]] = [order[i], order[i - 1]];
+                          updateSettings({ failoverOrder: order });
+                        }}
+                        style={{ background: "none", border: "none", color: i === 0 ? "#1e3a5f" : "#60a5fa", cursor: i === 0 ? "default" : "pointer", fontSize: 10, padding: "0 2px", lineHeight: 1 }}
+                      >▲</button>
+                      <button
+                        disabled={i === (settings.failoverOrder || PIDS).length - 1}
+                        onClick={() => {
+                          const order = [...(settings.failoverOrder || PIDS)];
+                          [order[i + 1], order[i]] = [order[i], order[i + 1]];
+                          updateSettings({ failoverOrder: order });
+                        }}
+                        style={{ background: "none", border: "none", color: i === (settings.failoverOrder || PIDS).length - 1 ? "#1e3a5f" : "#60a5fa", cursor: "pointer", fontSize: 10, padding: "0 2px", lineHeight: 1 }}
+                      >▼</button>
+                    </div>
+                    <button onClick={() => resetProviderCounts(p)}
+                      title="Reset counts & exhausted status"
+                      style={{ background: "none", border: "none", color: "#475569", cursor: "pointer", fontSize: 11, padding: "0 2px" }}>↺</button>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Per-provider limit editor */}
+            <div style={{ fontSize: 10, color: "#475569", marginBottom: 6 }}>
+              Edit known limits (set 0 = unlimited):
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 240, overflowY: "auto" }}>
+              {PIDS.map((p) => {
+                const limits = settings.rateLimits?.[p] || DEFAULT_RATE_LIMITS[p] || {};
+                return (
+                  <div key={p} style={{
+                    background: "rgba(0,71,171,0.05)", border: "1px solid rgba(0,71,171,0.15)",
+                    borderRadius: 7, padding: "7px 8px",
+                  }}>
+                    <div style={{ fontSize: 10, color: "#93c5fd", fontWeight: 700, marginBottom: 5 }}>
+                      {PROVIDERS[p]?.icon} {PROVIDERS[p]?.label}
+                      <span style={{ color: "#475569", fontWeight: 400, marginLeft: 6 }}>{limits.tier}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <label style={{ flex: 1, fontSize: 9, color: "#475569" }}>
+                        RPM
+                        <input type="number" min="0" max="9999" value={limits.rpm || 0}
+                          onChange={(e) => updateSettings({ rateLimits: { ...settings.rateLimits, [p]: { ...limits, rpm: Number(e.target.value) } } })}
+                          style={{ ...S.input, padding: "3px 6px", fontSize: 10, marginTop: 2 }}
+                        />
+                      </label>
+                      <label style={{ flex: 1, fontSize: 9, color: "#475569" }}>
+                        RPD
+                        <input type="number" min="0" max="999999" value={limits.rpd || 0}
+                          onChange={(e) => updateSettings({ rateLimits: { ...settings.rateLimits, [p]: { ...limits, rpd: Number(e.target.value) } } })}
+                          style={{ ...S.input, padding: "3px 6px", fontSize: 10, marginTop: 2 }}
+                        />
+                      </label>
+                      <label style={{ flex: 1, fontSize: 9, color: "#475569" }}>
+                        Tier
+                        <input type="text" value={limits.tier || ""}
+                          onChange={(e) => updateSettings({ rateLimits: { ...settings.rateLimits, [p]: { ...limits, tier: e.target.value } } })}
+                          style={{ ...S.input, padding: "3px 6px", fontSize: 10, marginTop: 2 }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
             {/* Chunk size */}
             <div style={{ ...S.drawerSection, marginTop: 20 }}>Translation Chunk Size</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1100,6 +1385,24 @@ function App() {
                 {PROVIDERS[pid]?.icon} {PROVIDERS[pid]?.label}
               </span>
               <span style={{ color: "#475569" }}> · {providerCfg.modelId}</span>
+              {(() => {
+                const health = getProviderHealth(pid);
+                const status = providerStatus[pid];
+                const limits = settings.rateLimits?.[pid] || DEFAULT_RATE_LIMITS[pid] || {};
+                return (
+                  <span style={{
+                    marginLeft: 4, fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 10,
+                    background: health === "exhausted" ? "rgba(239,68,68,0.15)" : health === "near" ? "rgba(245,158,11,0.15)" : "rgba(34,197,94,0.1)",
+                    color: health === "exhausted" ? "#f87171" : health === "near" ? "#f59e0b" : "#22c55e",
+                  }}>
+                    {health === "exhausted" ? "🔴 EXHAUSTED" : health === "near" ? "🟡 NEAR LIMIT" : "🟢 OK"}
+                    {status && limits.rpm > 0 && ` · ${status.rpm_used}/${limits.rpm} rpm`}
+                  </span>
+                );
+              })()}
+              {settings.autoFailover && (
+                <span style={{ fontSize: 9, color: "#475569", marginLeft: 2 }}>⚡ failover on</span>
+              )}
               <button onClick={() => setSettingsOpen(true)} style={S.changeBtn}>change</button>
             </div>
 
